@@ -72,7 +72,7 @@ void reader(App *self, int c) {
       print("Key: %d\n", bufferValue);
 
       for(int i = 0; i < 32; i++){
-        print("%d", per_array[freq_idx_2_arr(melody_notes + bufferValue)]);
+        print("%d", per_array[freq_idx_2_arr(melody_notes[i] + bufferValue)]);
         if(i != 31)
           print(", ");
       }
