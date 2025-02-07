@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-const int array[] = {
+const bool VERBOSE = true;
+
+const int melody_notes[] = {
   0, 2, 4, 0, 0, 2, 4, 0, 
   4, 5, 7, 4, 5, 7, 7, 9, 
   7, 5, 4, 0, 7, 9, 7, 5, 
@@ -56,10 +58,27 @@ void reader(App *self, int c) {
     int bufferValue;
     int sum;
     int median;
-    if (c == '\n')
-      return;
-    print("Rcv: '%c'\n", c);
+    if(VERBOSE){
+      if (c == '\n')
+        return;
+      print("Rcv: '%c'\n", c);
+    }
     switch (c) {
+    case 'k':
+      self->str_buff[self->str_index] = '\0';
+      self->str_index = 0;
+      bufferValue = atoi(self->str_buff);
+
+      print("Key: %d\n", bufferValue);
+
+      for(int i = 0; i < 32; i++){
+        print("%d", per_array[freq_idx_2_arr(melody_notes + bufferValue)]);
+        if(i != 31)
+          print(", ", per_array[freq_idx_2_arr(melody_notes + bufferValue)]);
+      }
+      print("\n", 0);
+      
+      break;
     case 'e':
       self->str_buff[self->str_index] = '\0';
       self->str_index = 0;
@@ -87,8 +106,8 @@ void reader(App *self, int c) {
         }
       }
       print("Entered integer %d: ", bufferValue);
-	  print("sum = %d, ", sum);
-	  print("median = %d\n", median);
+	    print("sum = %d, ", sum);
+	    print("median = %d\n", median);
       break;
     case 'f':
       self->str_index = 0;
