@@ -49,7 +49,7 @@ void reader(App *self, int c) {
 		return;
 	}
 	switch (c){
-		case 'k':
+		case 'k'://press k to introduce key
 			self->buffer[self->index] = '\0';
 			self->index = 0;
 			bufferValue = atoi(self->buffer);

@@ -3,36 +3,16 @@
 #include "canTinyTimber.h"
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdbool.h>
 
-const bool VERBOSE = true;
-
-const int melody_notes[] = {
-  0, 2, 4, 0, 0, 2, 4, 0, 
-  4, 5, 7, 4, 5, 7, 7, 9, 
-  7, 5, 4, 0, 7, 9, 7, 5, 
-  4, 0, 0, -5, 0, 0, -5, 0
-};
-const int per_array[] = {
-  2024, 1911, 1803, 1702, 1607, 1516, 1431, 1351,
-  1275, 1203, 1136, 1072, 1012,  955,  901,  851,
-   803,  758,  715,  675,  637,  601,  568,  536,
-   506
-};
-unsigned int freq_idx_2_arr(unsigned int in) {
-  return in + 10;
-}
-
+const int freq_array[32]={0, 2, 4, 0, 0, 2, 4, 0, 4, 5, 7, 4, 5, 7, 7, 9, 7, 5, 4, 0, 7, 9, 7, 5, 4, 0, 0, -5, 0, 0, -5, 0};
+const int per_array[25]={2024, 1911, 1803, 1702, 1607, 1516, 1431, 1351, 1275, 1203, 1136, 1072, 1012, 955, 901, 851, 803, 758, 715, 675, 637, 601, 568, 536, 506};
 typedef struct {
     Object super;
-    char str_buff[128];
-    int str_index;
-    int int_buff[3];
-    int int_index;
-    int int_count;
+	char buffer[128];
+	int index;
 } App;
 
-#define initApp() { initObject(), {}, 0, {}, 0, 0}
+#define initApp() { initObject(), {}, 0}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -55,71 +35,32 @@ void print(char *format, int arg) {
   SCI_WRITE(&sci0, buf);
 }
 
+void period_writer (int keyValue){
+	print("Key: '%d'\n", keyValue);
+	for (int i=0;i<=31;i++){
+		print("%d ",per_array[freq_array[i]+keyValue+10]);
+	}
+	print("\n",0);
+}
+
 void reader(App *self, int c) {
     int bufferValue;
-    int sum;
-    int median;
-    if(VERBOSE){
-      if (c == '\n')
-        return;
-      print("Rcv: '%c'\n", c);
-    }
-    switch (c) {
-    case 'k':
-      self->str_buff[self->str_index] = '\0';
-      self->str_index = 0;
-      bufferValue = atoi(self->str_buff);
-
-      print("Key: %d\n", bufferValue);
-
-      for(int i = 0; i < 32; i++){
-        print("%d", per_array[freq_idx_2_arr(melody_notes[i] + bufferValue)]);
-        if(i != 31)
-          print(", ",0);
-      }
-      print("\n", 0);
-      
-      break;
-    case 'e':
-      self->str_buff[self->str_index] = '\0';
-      self->str_index = 0;
-      bufferValue = atoi(self->str_buff);
-
-      self->int_buff[self->int_index++%3] = bufferValue;
-      self->int_count = (self->int_count >= 3) ? 3 : self->int_count+1;
-
-      sum = 0;
-      for (unsigned short int i = 0; i < self->int_count; i++){
-        sum += self->int_buff[i];
-      }
-      
-      if(self->int_count == 1){
-        median = sum;
-      }else if(self->int_count == 2){
-        median = sum/2;
-      }else{
-        if ((self->int_buff[0] >= self->int_buff[1] && self->int_buff[0] <= self->int_buff[2]) || (self->int_buff[0] <= self->int_buff[1] && self->int_buff[0] >= self->int_buff[2])) {
-            median = self->int_buff[0]; // self->int_buff[0] is the middle value
-        } else if ((self->int_buff[1] >= self->int_buff[0] && self->int_buff[1] <= self->int_buff[2]) || (self->int_buff[1] <= self->int_buff[0] && self->int_buff[1] >= self->int_buff[2])) {
-            median = self->int_buff[1]; // self->int_buff[1] is the middle value
-        } else {
-            median = self->int_buff[2]; // self->int_buff[2] is the middle value
-        }
-      }
-      print("Entered integer %d: ", bufferValue);
-	    print("sum = %d, ", sum);
-	    print("median = %d\n", median);
-      break;
-    case 'f':
-      self->str_index = 0;
-      self->int_index = 0;
-      self->int_count = 0;
-      print("The 3-history has been erased.\n",0);
-      break;
-    default:
-      self->str_buff[self->str_index++] = c;
-      break;
-    }
+	if (c == '\n'){
+		return;
+	}
+	switch (c){
+		case 'm'://mute
+			
+		case 'v'://press v to confirm volume change
+			self->buffer[self->index] = '\0';
+			self->index = 0;
+			bufferValue = atoi(self->buffer);
+			
+			break;
+		default:
+			self->buffer[self->index++] = c;
+			break;
+	}
 }
 
 void startApp(App *self, int arg) {
