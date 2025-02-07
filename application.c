@@ -48,7 +48,7 @@ void receiver(App *self, int unused) {
     SCI_WRITE(&sci0, msg.buff);
 }
 
-void print(char *format, int arg) {
+void print(char *format, int arg = 0) {
   char buf[128];
   snprintf(buf, 128, format,arg);
   SCI_WRITE(&sci0, buf);
@@ -74,7 +74,7 @@ void reader(App *self, int c) {
       for(int i = 0; i < 32; i++){
         print("%d", per_array[freq_idx_2_arr(melody_notes + bufferValue)]);
         if(i != 31)
-          print(", ", per_array[freq_idx_2_arr(melody_notes + bufferValue)]);
+          print(", ");
       }
       print("\n", 0);
       
@@ -113,7 +113,7 @@ void reader(App *self, int c) {
       self->str_index = 0;
       self->int_index = 0;
       self->int_count = 0;
-      print("The 3-history has been erased.\n", 0);
+      print("The 3-history has been erased.\n");
       break;
     default:
       self->str_buff[self->str_index++] = c;
