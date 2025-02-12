@@ -1,11 +1,15 @@
 #include "TinyTimber.h"
 #include "sciTinyTimber.h"
 #include "canTinyTimber.h"
+#include "stm32f4xx_dac.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 
 const bool VERBOSE = true;
+
+const int DAC_WR_ADDR = DAC_Trigger_T5_TRGO + DAC_BASE;
+#define DAC_wr_pointer ((volatile unsigned char *)0x4000741C)
 
 const int melody_notes[] = {
   0, 2, 4, 0, 0, 2, 4, 0, 
@@ -32,12 +36,20 @@ typedef struct {
     int int_count;
 } App;
 
+typedef struct {
+  Object super;
+  int volume;
+  int muted;
+} DAC_obj;
+
 #define initApp() { initObject(), {}, 0, {}, 0, 0}
+#define initDAC() { initObject(), 5}
 
 void reader(App*, int);
 void receiver(App*, int);
 
 App app = initApp();
+DAC_obj dac_obj = initDAC();
 Serial sci0 = initSerial(SCI_PORT0, &app, reader);
 
 Can can0 = initCan(CAN_PORT0, &app, receiver);
@@ -55,6 +67,30 @@ void print(char *format, int arg) {
   SCI_WRITE(&sci0, buf);
 }
 
+void DAC_set_vol(DAC_obj *self, int vol){
+  self->volume = vol;
+}
+
+void DAC_mute(DAC_obj *self, int dummy){
+  if(self->muted == 1)
+    self->muted = 0;
+  else
+    self->muted = 1;
+}
+
+void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
+  int next = play;
+  if(play == 0 || self->muted == 1){
+    *DAC_wr_pointer = 0;
+	  next = 1;
+  }else{
+    *DAC_wr_pointer = self->volume;
+    next = 0;
+  }
+  
+  AFTER(USEC(500), &dac_obj, DAC_wr, next);
+}
+
 void reader(App *self, int c) {
     int bufferValue;
     int sum;
@@ -65,6 +101,22 @@ void reader(App *self, int c) {
       print("Rcv: '%c'\n", c);
     }
     switch (c) {
+      case 'm'://mute
+        DAC_mute(&dac_obj, 0);
+        break;
+      case 'v'://press v to confirm volume change
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if (bufferValue<1){
+          bufferValue=1;
+          print("Minimum volume is 1",0);
+        }else if (bufferValue>10){
+          bufferValue=10;
+          print("Maximum volume is 10",0);
+        }
+        DAC_set_vol(&dac_obj,bufferValue);
+        break;
     case 'k':
       self->str_buff[self->str_index] = '\0';
       self->str_index = 0;
@@ -139,6 +191,9 @@ void startApp(App *self, int arg) {
     msg.buff[4] = 'o';
     msg.buff[5] = 0;
     CAN_SEND(&can0, &msg);
+
+    AFTER(USEC(500), &dac_obj, DAC_wr, 1);
+
 }
 
 int main() {
