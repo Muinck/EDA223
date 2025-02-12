@@ -40,16 +40,24 @@ typedef struct {
   Object super;
   int volume;
   int muted;
+  int period;
 } DAC_obj;
 
+typedef struct {
+  Object super;
+  int loop_range;
+} loop_load;
+
 #define initApp() { initObject(), {}, 0, {}, 0, 0}
-#define initDAC() { initObject(), 5}
+#define initDAC() { initObject(), 5, 0, 500}
+#define initload() { initObject(), 1000}
 
 void reader(App*, int);
 void receiver(App*, int);
 
 App app = initApp();
 DAC_obj dac_obj = initDAC();
+loop_load load = initload();
 Serial sci0 = initSerial(SCI_PORT0, &app, reader);
 
 Can can0 = initCan(CAN_PORT0, &app, receiver);
@@ -67,6 +75,23 @@ void print(char *format, int arg) {
   SCI_WRITE(&sci0, buf);
 }
 
+int add_loop_range(loop_load *self, int dummy){
+  self->loop_range = self->loop_range + 500;
+  return self->loop_range;
+}
+int sub_loop_range(loop_load *self, int dummy){
+	if(self->loop_range >= 500)
+    self->loop_range = self->loop_range - 500;
+  return self->loop_range;
+}
+
+void empty_loop(loop_load *self, int dummy){
+  
+  for(int i = 0; i < self->loop_range; i++){}
+
+  AFTER(USEC(1300), &load, empty_loop, 0);
+}
+
 void DAC_set_vol(DAC_obj *self, int vol){
   self->volume = vol;
 }
@@ -74,11 +99,16 @@ void DAC_set_vol(DAC_obj *self, int vol){
 void DAC_mute(DAC_obj *self, int dummy){
   if(self->muted == 1){
     self->muted = 0;
-    print("DAC muted");
+    print("DAC muted", 0);
   }else{
-    print("DAC unmuted");
+    print("DAC unmuted", 0);
     self->muted = 1;
   }
+}
+
+void DAC_set_freq(DAC_obj *self, int freq){
+  int period = 1000000/(2*freq);
+  self->period = period;
 }
 
 void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
@@ -90,8 +120,7 @@ void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
     *DAC_wr_pointer = self->volume;
     next = 0;
   }
-  
-  AFTER(USEC(500), &dac_obj, DAC_wr, next);
+  AFTER(USEC(self->period), &dac_obj, DAC_wr, next);
 }
 
 void reader(App *self, int c) {
@@ -107,6 +136,25 @@ void reader(App *self, int c) {
       case 'm'://mute
         DAC_mute(&dac_obj, 0);
         break;
+      case 'h'://press h to set the freq in heartz
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if (bufferValue<0){
+          bufferValue=0;
+          print("Minimum freq is 0 heartzs",0);
+        }
+        DAC_set_freq(&dac_obj, bufferValue);
+        print("Setting DAC frequency to %d\n", bufferValue);
+        break;
+      case 'u'://press u to increase the loop range
+        bufferValue = add_loop_range(&load, 0);
+        print("Increasing loop range to %d\n", bufferValue);
+        break;
+      case 'd'://press d to decreaset the loop range
+        bufferValue = sub_loop_range(&load, 0);
+        print("Decreasing loop range to %d\n", bufferValue);
+        break;
       case 'v'://press v to confirm volume change
         self->str_buff[self->str_index] = '\0';
         self->str_index = 0;
@@ -118,7 +166,7 @@ void reader(App *self, int c) {
           bufferValue=10;
           print("Maximum volume is 10",0);
         }
-        print("Volume set to: %d\n" bufferValue);
+        print("Volume set to: %d\n", bufferValue);
         DAC_set_vol(&dac_obj,bufferValue);
         break;
     case 'k':
@@ -196,6 +244,7 @@ void startApp(App *self, int arg) {
     msg.buff[5] = 0;
     CAN_SEND(&can0, &msg);
 
+    AFTER(USEC(1300), &load, empty_loop, 0);
     AFTER(USEC(500), &dac_obj, DAC_wr, 1);
 
 }
