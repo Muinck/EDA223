@@ -72,10 +72,13 @@ void DAC_set_vol(DAC_obj *self, int vol){
 }
 
 void DAC_mute(DAC_obj *self, int dummy){
-  if(self->muted == 1)
+  if(self->muted == 1){
     self->muted = 0;
-  else
+    print("DAC muted");
+  }else{
+    print("DAC unmuted");
     self->muted = 1;
+  }
 }
 
 void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
@@ -115,6 +118,7 @@ void reader(App *self, int c) {
           bufferValue=10;
           print("Maximum volume is 10",0);
         }
+        print("Volume set to: %d\n" bufferValue);
         DAC_set_vol(&dac_obj,bufferValue);
         break;
     case 'k':
