@@ -1,9 +1,3 @@
-//User guide:
-//Press 'v' to input the desired volume
-//Press 'm' to mute and again to unmute
-//Press 'u' and 'd' to increase and decrease distortion, respectively
-//Press 'q' to enable and disable deadlines
-//Press 'h' to change the frequency
 //Press 'p' to print the user guide
 
 #include "TinyTimber.h"
@@ -13,6 +7,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 const bool VERBOSE = true;
 
@@ -50,7 +47,8 @@ typedef struct {
   int volume;
   int muted;
   int period;
-	int d_deadline;
+  int d_deadline;
+  int play;
 	
 	int d_tic;
 	int d_totaltime;
@@ -78,7 +76,7 @@ typedef struct {
 } loop_load;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0}
-#define initDAC() { initObject(), 5, 0, 500, 0, 0, 0, 0, 0, {}, 0, 0}
+#define initDAC() { initObject(), 5, 0, 500, 0, 0, 0, 0, 0, 0, {}, 0, 0}
 #define initload() { initObject(), 1000, 0, 0, 0 ,0 , 0, {}, 0, 0}
 
 void reader(App*, int);
@@ -102,6 +100,21 @@ void print(char *format, int arg) {
   char buf[128];
   snprintf(buf, 128, format,arg);
   SCI_WRITE(&sci0, buf);
+}
+
+void measure_empty_loop(loop_load *self, int unused){	
+	for(int i=0; i<self->loop_range; i++){
+	}
+}
+
+void measure_tonegen(DAC_obj *self){	
+	if(self->play == 0 || self->muted == 1){
+		*DAC_wr_pointer = 0;
+		self->play = 1;
+	}else{
+		*DAC_wr_pointer = self->volume;
+		self->play = 0;
+	}
 }
 
 int add_loop_range(loop_load *self, int dummy){
@@ -179,6 +192,9 @@ void reader(App *self, int c) {
   int bufferValue;
   int sum;
   int median;
+  unsigned long long int start_tim, end_tim, global_start_tim;
+  unsigned long long int tot_tim;
+  unsigned long long int max_tim;
   if(VERBOSE){
     if (c == '\n')
       return;
@@ -196,8 +212,10 @@ void reader(App *self, int c) {
       print("q: enables/disables deadlines\n",0);
       print("<int>e: adds number <int> to the list and prints sum and median of the list\n",0);
       print("f: history list erased\n",0);
+	  print("<int>t: executes an isolated task <int> times and prints max and avg WCET.\n",0);
       break;
     case 'm'://mute
+      SYNC(&obj_dac, DAC_mute, 0);
       break;
     case 'h'://press h to set the freq in heartz
       self->str_buff[self->str_index] = '\0';
@@ -245,8 +263,42 @@ void reader(App *self, int c) {
         print(", ",0);
     }
     print("\n", 0);
-    
     break;
+  case 't':
+	self->str_buff[self->str_index] = '\0';
+	self->str_index = 0;
+	bufferValue = atoi(self->str_buff);
+	print("Measuring background task exec time for %d loop executions\n", bufferValue);
+	tot_tim = 0;
+	max_tim=0;
+	for(int i = 0; i < bufferValue; i++){
+		start_tim = USEC_OF(CURRENT_OFFSET());
+		SYNC(&load, measure_empty_loop, 0);
+        end_tim = USEC_OF(CURRENT_OFFSET());
+        tot_tim += end_tim - start_tim;
+		max_tim = MAX(max_tim, end_tim - start_tim);
+	}
+	print("Max time per loop: %d us.\n", max_tim);
+	print("Avg time per loop: %d us.\n", tot_tim/bufferValue);
+	
+	print("Measuring tone generator exec time for %d loop executions\n", bufferValue);
+	
+	tot_tim = 0;
+	max_tim=0;
+	tot_tim = 0;
+	global_start_tim=USEC_OF(CURRENT_OFFSET());
+	for (int j=0; j<bufferValue; j++){
+		start_tim = USEC_OF(CURRENT_OFFSET());
+		for(int i = 0; i < 1000; i++){
+			measure_tonegen(&obj_dac);
+		}
+		end_tim = USEC_OF(CURRENT_OFFSET());
+		max_tim = MAX(max_tim, end_tim - start_tim);
+	}
+	tot_tim = USEC_OF(CURRENT_OFFSET()) - global_start_tim;
+	print("Max time per task: %d ns.\n", max_tim);
+	print("Avg time per task: %d ns.\n", tot_tim/bufferValue);
+	break;
   case 'q'://enable and disable deadlines
     SYNC(&obj_dac, dac_deadline, 0);
     SYNC(&load, load_deadline, 0);
@@ -311,8 +363,8 @@ void startApp(App *self, int arg) {
   msg.buff[5] = 0;
   CAN_SEND(&can0, &msg);
 
-  AFTER(USEC(1300), &load, empty_loop, 0);
-  AFTER(USEC(500), &obj_dac, DAC_wr, 1);
+// AFTER(USEC(1300), &load, empty_loop, 0);
+// AFTER(USEC(500), &obj_dac, DAC_wr, 1);
 
 }
 
