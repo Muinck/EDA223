@@ -122,24 +122,6 @@ void empty_loop(loop_load *self, int unused){
 		AFTER(USEC(1300), self, empty_loop, 0);
 	else
 		SEND(USEC(1300), USEC(1300), self, empty_loop, 0);
-	
-//	self->l_count++;
-//	if (self->l_count==999){
-//		self->l_count = 0;
-//		self->l_exec_time[self->l_run] = USEC_OF(CURRENT_OFFSET())-self->l_tic;
-//		self->l_tic = CURRENT_OFFSET();
-//		self->l_totaltime = self->l_totaltime + self->l_exec_time[self->l_run];
-//		self->l_exec_time[self->l_run] = self->l_exec_time[self->l_run]/1000;
-//		if(self->l_exec_time[self->l_run]>self->l_maxtime)
-//			self->l_maxtime=self->l_exec_time[self->l_run];
-//		self->l_run++;
-//		print("Run: %d.\n",self->l_run);
-//		if(self->l_run==500){
-//			self->l_average = (self->l_totaltime/1000)/500;
-//			print("Average WCET is %d.\n",self->l_average);
-//			print("Maximum WCET is %d.\n",self->l_maxtime);
-//		}
-//	}
 }
 
 void dac_deadline(DAC_obj *self, int unused){
@@ -216,7 +198,6 @@ void reader(App *self, int c) {
       print("f: history list erased\n",0);
       break;
     case 'm'://mute
-      DAC_mute(&obj_dac, 0);
       break;
     case 'h'://press h to set the freq in heartz
       self->str_buff[self->str_index] = '\0';
@@ -226,15 +207,15 @@ void reader(App *self, int c) {
         bufferValue=0;
         print("Minimum freq is 0 heartzs",0);
       }
-      DAC_set_freq(&obj_dac, bufferValue);
+      SYNC(&obj_dac, DAC_set_freq, bufferValue);
       print("Setting DAC frequency to %d\n", bufferValue);
       break;
     case 'u'://press u to increase the loop range
-      bufferValue = add_loop_range(&load, 0);
+      bufferValue = SYNC(&load, add_loop_range, 0);
       print("Increasing loop range to %d\n", bufferValue);
       break;
     case 'd'://press d to decreaset the loop range
-      bufferValue = sub_loop_range(&load, 0);
+      bufferValue = SYNC(&load, sub_loop_range, 0);
       print("Decreasing loop range to %d\n", bufferValue);
       break;
     case 'v'://press v to confirm volume change
@@ -249,7 +230,7 @@ void reader(App *self, int c) {
         print("Maximum volume is 10",0);
       }
       print("Volume set to: %d\n", bufferValue);
-      DAC_set_vol(&obj_dac,bufferValue);
+      SYNC(&obj_dac, DAC_set_vol, bufferValue);
       break;
   case 'k':
     self->str_buff[self->str_index] = '\0';
@@ -267,8 +248,8 @@ void reader(App *self, int c) {
     
     break;
   case 'q'://enable and disable deadlines
-    dac_deadline(&obj_dac, 0);
-    load_deadline(&load, 0);
+    SYNC(&obj_dac, dac_deadline, 0);
+    SYNC(&load, load_deadline, 0);
     break;
   case 'e':
     self->str_buff[self->str_index] = '\0';
