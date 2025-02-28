@@ -29,6 +29,13 @@ const int per_array[] = {
    506
 };
 
+const float note_dur[] = {
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+  2, 1, 1, 2, 0.5, 0.5, 0.5, 0.5, 1, 1,
+  0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1, 2, 1,
+  1, 2
+};
+
 unsigned int freq_idx_2_arr(unsigned int in) {
   return in + 10;
 }
@@ -46,44 +53,38 @@ typedef struct {
   Object super;
   int volume;
   int muted;
+  int gap;
   int period;
   int d_deadline;
   int play;
-	
-	int d_tic;
-	int d_totaltime;
-	int d_average;
-	int d_maxtime;
-	int d_exec_time[500];
-	
-	int d_count;
-	int d_run;
 } DAC_obj;
+
+typedef struct {
+  Object super;
+  int tempo; // period in ms
+  int gap_siz; // ms
+  int key;
+  int kill;
+  int mel_idx;
+} Mel_obj;
 
 typedef struct {
   Object super;
   int loop_range;
 	int l_deadline;
-  
-	int l_tic;
-	int l_totaltime;
-	int l_average;
-	int l_maxtime;
-	int l_exec_time[500];
-	
-	int l_count;
-	int l_run;
 } loop_load;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0}
-#define initDAC() { initObject(), 5, 0, 500, 0, 0, 0, 0, 0, 0, {}, 0, 0}
-#define initload() { initObject(), 1000, 0, 0, 0 ,0 , 0, {}, 0, 0}
+#define initDAC() { initObject(), 5, 0, 0, 500, 0, 0}
+#define initload() { initObject(), 1000, 0}
+#define initMel() { initObject(), 60000/120, 50, 0, 0, 0}
 
 void reader(App*, int);
 void receiver(App*, int);
 
 App app = initApp();
 DAC_obj obj_dac = initDAC();
+Mel_obj mel_obj = initMel();
 loop_load load = initload();
 Serial sci0 = initSerial(SCI_PORT0, &app, reader);
 
@@ -94,6 +95,10 @@ void receiver(App *self, int unused) {
   CAN_RECEIVE(&can0, &msg);
   SCI_WRITE(&sci0, "Can msg received: ");
   SCI_WRITE(&sci0, msg.buff);
+}
+
+int bpm2tempo(int bpm){
+  return 60000/bpm; // ms
 }
 
 void print(char *format, int arg) {
@@ -127,7 +132,6 @@ int sub_loop_range(loop_load *self, int dummy){
   return self->loop_range;
 }
 
-
 void empty_loop(loop_load *self, int unused){	
 	for(int i=0; i<self->loop_range; i++){
 	}
@@ -142,6 +146,14 @@ void dac_deadline(DAC_obj *self, int unused){
 		self->d_deadline=1;
 	else
 		self->d_deadline=0;
+}
+
+void mel_set_tempo(Mel_obj *self, int tempo){
+  self->tempo = bpm2tempo(tempo);
+}
+
+void mel_set_key(Mel_obj *self, int key){
+  self->key = key;
 }
 
 void load_deadline(loop_load *self, int unused){
@@ -168,24 +180,63 @@ void DAC_mute(DAC_obj *self, int dummy){
   }
 }
 
+void DAC_gap(DAC_obj *self, int gap){
+  self->gap = gap;
+}
+
+void Mel_kill(Mel_obj *self, int kill){
+  self->kill = kill;
+}
+
 void DAC_set_freq(DAC_obj *self, int freq){
   int period = 1000000/(2*freq);
   self->period = period;
 }
 
+void DAC_set_period(DAC_obj *self, int period){
+  self->period = period;
+}
+
 void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
   int next = play;
-  if(play == 0 || self->muted == 1){
+  if(play == 0 || self->muted == 1 || self->gap == 1){
     *DAC_wr_pointer = 0;
 	  next = 1;
   }else{
     *DAC_wr_pointer = self->volume;
     next = 0;
   }
-  	if (self->d_deadline==0)
-		AFTER(USEC(self->period), self, DAC_wr, next);
+  if (self->d_deadline==0)
+  AFTER(USEC(self->period), self, DAC_wr, next);
 	else
-		SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
+  SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
+}
+
+void play_song_funct(Mel_obj *self, int in){
+  // 0 -> note, 1 -> gap
+
+  if(self->kill == 1){
+    // mute
+    SYNC(&obj_dac, DAC_gap, 1);
+    self->mel_idx = 0;
+    return;
+  }
+  if(in == 0){
+    // set new tone
+    SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx] + self->key)]);
+    // unmute
+    SYNC(&obj_dac, DAC_gap, 0);
+    // after call for tempo - gap
+    AFTER(MSEC((self->tempo*note_dur[self->mel_idx])-self->gap_siz), self, play_song_funct, 1);
+  }else{
+    // mute
+    SYNC(&obj_dac, DAC_gap, 1);
+    // update index
+    self->mel_idx = (self->mel_idx+1)%32;
+    //after call for gap
+    AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
+
+  }
 }
 
 void reader(App *self, int c) {
@@ -208,6 +259,9 @@ void reader(App *self, int c) {
       print("u: increases loop range by 500\n",0);
       print("d: decreases loop range by 500\n",0);
       print("<int>v: sets the volume to <int>\n",0);
+      print("<int>b: sets the bpms of the song\n",0);
+      print("s: starts playing the song\n",0);
+      print("x: stops playing the song\n",0);
       print("<int>k: changes the playing key to <int>\n",0);
       print("q: enables/disables deadlines\n",0);
       print("<int>e: adds number <int> to the list and prints sum and median of the list\n",0);
@@ -216,6 +270,22 @@ void reader(App *self, int c) {
       break;
     case 'm'://mute
       SYNC(&obj_dac, DAC_mute, 0);
+      break;
+    case 'b': // set bpms
+      self->str_buff[self->str_index] = '\0';
+      self->str_index = 0;
+      bufferValue = atoi(self->str_buff);
+      SYNC(&mel_obj, mel_set_tempo, bufferValue);
+      print("Bpms setted to %d\n", bufferValue);
+      break;
+    case 's': //start the song
+      print("Starting to play the song\n", 0);
+      SYNC(&mel_obj, Mel_kill, 0);
+      ASYNC(&mel_obj, play_song_funct, 0);
+      break;
+    case 'x':
+      SYNC(&mel_obj, Mel_kill, 1);
+      print("Stop the song\n", 0);
       break;
     case 'h'://press h to set the freq in heartz
       self->str_buff[self->str_index] = '\0';
@@ -255,14 +325,15 @@ void reader(App *self, int c) {
     self->str_index = 0;
     bufferValue = atoi(self->str_buff);
 
+    SYNC(&mel_obj, mel_set_key, bufferValue);
     print("Key: %d\n", bufferValue);
 
-    for(int i = 0; i < 32; i++){
-      print("%d", per_array[freq_idx_2_arr(melody_notes[i] + bufferValue)]);
-      if(i != 31)
-        print(", ",0);
-    }
-    print("\n", 0);
+    // for(int i = 0; i < 32; i++){
+    //   print("%d", per_array[freq_idx_2_arr(melody_notes[i] + bufferValue)]);
+    //   if(i != 31)
+    //     print(", ",0);
+    // }
+    // print("\n", 0);
     break;
   case 't':
 	self->str_buff[self->str_index] = '\0';
@@ -364,7 +435,8 @@ void startApp(App *self, int arg) {
   CAN_SEND(&can0, &msg);
 
 // AFTER(USEC(1300), &load, empty_loop, 0);
-// AFTER(USEC(500), &obj_dac, DAC_wr, 1);
+  SYNC(&obj_dac, DAC_gap, 1);
+  ASYNC(&obj_dac, DAC_wr, 1);
 
 }
 
