@@ -275,6 +275,14 @@ void reader(App *self, int c) {
       self->str_buff[self->str_index] = '\0';
       self->str_index = 0;
       bufferValue = atoi(self->str_buff);
+      if(bufferValue < 60){
+        print("Minimum bpms is 60\n", 0);
+        bufferValue = 60;
+      }else if (bufferValue > 240){
+        print("Maximun value is 240\n", 0);
+        bufferValue = 240;
+      }
+      
       SYNC(&mel_obj, mel_set_tempo, bufferValue);
       print("Bpms setted to %d\n", bufferValue);
       break;
