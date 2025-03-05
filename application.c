@@ -62,7 +62,7 @@ typedef struct {
 typedef struct {
   Object super;
   int tempo; // period in ms
-  int gap_siz; // ms
+  int gap_siz; // ms //cte
   int key;
   int kill;
   int mel_idx;
@@ -75,9 +75,9 @@ typedef struct {
 } loop_load;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0}
-#define initDAC() { initObject(), 5, 0, 0, 500, 0, 0}
+#define initDAC() { initObject(), 15, 0, 0, 500, 0, 0}
 #define initload() { initObject(), 1000, 0}
-#define initMel() { initObject(), 60000/120, 50, 0, 0, 0}
+#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -98,7 +98,7 @@ void receiver(App *self, int unused) {
 }
 
 int bpm2tempo(int bpm){
-  return 60000/bpm; // ms
+  return 60000000/bpm; // us
 }
 
 void print(char *format, int arg) {
@@ -226,8 +226,8 @@ void play_song_funct(Mel_obj *self, int in){
     SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx] + self->key)]);
     // unmute
     SYNC(&obj_dac, DAC_gap, 0);
-    // after call for tempo - gap
-    AFTER(MSEC((self->tempo*note_dur[self->mel_idx])-self->gap_siz), self, play_song_funct, 1);
+    // after call for tempo - gap    
+    AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
   }else{
     // mute
     SYNC(&obj_dac, DAC_gap, 1);
@@ -235,7 +235,6 @@ void play_song_funct(Mel_obj *self, int in){
     self->mel_idx = (self->mel_idx+1)%32;
     //after call for gap
     AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
-
   }
 }
 
@@ -260,8 +259,8 @@ void reader(App *self, int c) {
       print("d: decreases loop range by 500\n",0);
       print("<int>v: sets the volume to <int>\n",0);
       print("<int>b: sets the bpms of the song\n",0);
-      print("s: starts playing the song\n",0);
-      print("x: stops playing the song\n",0);
+      // print("s: starts playing the song\n",0);
+      // print("x: stops playing the song\n",0);
       print("<int>k: changes the playing key to <int>\n",0);
       print("q: enables/disables deadlines\n",0);
       print("<int>e: adds number <int> to the list and prints sum and median of the list\n",0);
@@ -286,15 +285,15 @@ void reader(App *self, int c) {
       SYNC(&mel_obj, mel_set_tempo, bufferValue);
       print("Bpms setted to %d\n", bufferValue);
       break;
-    case 's': //start the song
-      print("Starting to play the song\n", 0);
-      SYNC(&mel_obj, Mel_kill, 0);
-      ASYNC(&mel_obj, play_song_funct, 0);
-      break;
-    case 'x':
-      SYNC(&mel_obj, Mel_kill, 1);
-      print("Stop the song\n", 0);
-      break;
+    // case 's': //start the song
+    //   print("Starting to play the song\n", 0);
+    //   SYNC(&mel_obj, Mel_kill, 0);
+    //   ASYNC(&mel_obj, play_song_funct, 0);
+    //   break;
+    // case 'x':
+    //   SYNC(&mel_obj, Mel_kill, 1);
+    //   print("Stop the song\n", 0);
+    //   break;
     case 'h'://press h to set the freq in heartz
       self->str_buff[self->str_index] = '\0';
       self->str_index = 0;
@@ -321,9 +320,9 @@ void reader(App *self, int c) {
       if (bufferValue<1){
         bufferValue=1;
         print("Minimum volume is 1",0);
-      }else if (bufferValue>10){
-        bufferValue=10;
-        print("Maximum volume is 10",0);
+      }else if (bufferValue>20){
+        bufferValue=20;
+        print("Maximum volume is 20",0);
       }
       print("Volume set to: %d\n", bufferValue);
       SYNC(&obj_dac, DAC_set_vol, bufferValue);
@@ -332,6 +331,13 @@ void reader(App *self, int c) {
     self->str_buff[self->str_index] = '\0';
     self->str_index = 0;
     bufferValue = atoi(self->str_buff);
+    if (bufferValue < -5){
+      bufferValue=-5;
+      print("Minimum key is -5\n",0);
+    }else if (bufferValue>5){
+      bufferValue=5;
+      print("Maximum key is 5\n",0);
+    }
 
     SYNC(&mel_obj, mel_set_key, bufferValue);
     print("Key: %d\n", bufferValue);
@@ -445,6 +451,8 @@ void startApp(App *self, int arg) {
 // AFTER(USEC(1300), &load, empty_loop, 0);
   SYNC(&obj_dac, DAC_gap, 1);
   ASYNC(&obj_dac, DAC_wr, 1);
+  SYNC(&mel_obj, Mel_kill, 0);
+  ASYNC(&mel_obj, play_song_funct, 0);
 
 }
 
