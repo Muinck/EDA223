@@ -310,7 +310,32 @@ void reader(App *self, int c) {
       return;
     print("Rcv: '%c'\n", c);
 	}
-	if(self->conductor_mode == 1){//conductor mode
+	
+  if(self->can_mode == 1){
+    switch (c)
+    {
+      case 'e':
+        self->can_mode = 0;
+		if(self->str_index < 1){
+          print("At least msgid shall be inputed\n", 0);
+        }else{
+          can_msg.msgId = (self->str_buff[0]) & 0x7F;
+          can_msg.nodeId = can_node_id;
+          can_msg.length = self->str_index-1;
+          for( int i = 0; i < self->str_index-1; i++){
+            can_msg.buff[i] = self->str_buff[i+1];
+          }
+          can_msg.buff[self->str_index-1] = 0;
+          self->str_index = 0;
+          CAN_SEND(&can0, &can_msg);
+        }	
+        break;
+      default:
+        self->str_buff[self->str_index++] = c;
+        break;
+    }
+
+  }else if(self->conductor_mode == 1){//conductor mode
 		switch (c) {
 			case 'p':
 				print("p: shows this message\n",0);
@@ -328,6 +353,13 @@ void reader(App *self, int c) {
 				SYNC(&mel_obj, Mel_kill, 1);
 				print("Now in musician mode\n", 0);
 				break;
+      case 'c':
+        self->can_mode = 1;
+        break;
+      case 'm'://mute
+        SYNC(&obj_dac, DAC_mute, 0);
+        can_write(&app, c);
+        break;
 			case 'b': // set bpms
 				self->str_buff[self->str_index] = '\0';
 				can_write(&app, c);
@@ -391,25 +423,28 @@ void reader(App *self, int c) {
 	}else{ // musician mode
 		switch (c) {
 		  case 'p':
-			print("p: shows this message\n",0);
-			print("g: change to conductor mode\n",0);
-			print("t: mutes/unmutes song\n",0);
-			print("m: enables/disables mute state printing\n",0);
-			break;
+        print("p: shows this message\n",0);
+        print("g: change to conductor mode\n",0);
+        print("t: mutes/unmutes song\n",0);
+        print("m: enables/disables mute state printing\n",0);
+        break;
 		  case 'g':
-			self->conductor_mode = 1;
-			SYNC(&mel_obj, Mel_kill, 1);
-			print("Now in conductor mode\n", 0);
-			break;
-		case 't'://mute
-			SYNC(&obj_dac, DAC_mute, 0);
-			break;
-		case 'm'://enable or disabled mute state printing
-			SYNC(&obj_dac, DAC_mute_print_en, 0);
-			break;
-		  default:
-			self->str_buff[self->str_index++] = c;
-			break;
+        self->conductor_mode = 1;
+        SYNC(&mel_obj, Mel_kill, 1);
+        print("Now in conductor mode\n", 0);
+        break;
+      case 'c':
+        self->can_mode = 1;
+        break;
+      case 't'://mute
+        SYNC(&obj_dac, DAC_mute, 0);
+        break;
+      case 'm'://enable or disabled mute state printing
+        SYNC(&obj_dac, DAC_mute_print_en, 0);
+        break;
+      default:
+        self->str_buff[self->str_index++] = c;
+        break;
 		}
 	}
 }
