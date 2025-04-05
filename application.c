@@ -80,7 +80,7 @@ typedef struct {
 } loop_load;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0, 0, 1}
-#define initDAC() { initObject(), 15, 0, 0, 500, 0, 0}
+#define initDAC() { initObject(), 3, 0, 0, 500, 0, 0}
 #define initload() { initObject(), 1000, 0}
 #define initMel() { initObject(), 60000000/120, 50, 0, 0, 0}
 
@@ -260,7 +260,7 @@ void receiver(App *self, int unused) {
     switch (id_sw) {
       case 'p':
         print("CAN protocol expects the msgId to be one of the following:\n", 0);
-        print("When data needs to be provided, shal be done in str format in the msg:\n\n", 0);
+        print("When data needs to be provided, it shall be done in str format in the msg:\n\n", 0);
         print("m: mutes the DAC\n", 0);
         print("h: sets the frequency of the DAC in hz\n", 0);
         print("u: increases loop range by 500\n", 0);
@@ -270,7 +270,7 @@ void receiver(App *self, int unused) {
         print("s: starts playing the song\n", 0);
         print("x: stops playing the song\n", 0);
         print("<int>k: changes the playing key to <int>\n", 0);
-        break
+        break;
       case 'm'://mute
         SYNC(&obj_dac, DAC_mute, 0);
         break;
@@ -341,12 +341,26 @@ void receiver(App *self, int unused) {
   }
 }
 
+void can_write(App *self, int id){
+	CANMsg can_msg;
+    can_msg.msgId = id & 0x7F;
+    can_msg.nodeId = can_node_id;
+    can_msg.length = self->str_index;
+    for( int i = 0; i <= self->str_index-1; i++){
+		can_msg.buff[i] = self->str_buff[i];
+	}
+    can_msg.buff[self->str_index] = 0;
+    self->str_index = 0;
+    CAN_SEND(&can0, &can_msg);
+}
+
 void reader(App *self, int c) {
   int bufferValue;
+  CANMsg can_msg;
   unsigned long long int start_tim, end_tim, global_start_tim;
   unsigned long long int tot_tim;
   unsigned long long int max_tim;  
-  CANMsg can_msg;
+  //CANMsg can_msg;
 
   if(VERBOSE){
     if (c == '\n')
@@ -358,8 +372,7 @@ void reader(App *self, int c) {
     {
       case 'e':
         self->can_mode = 0;
-
-        if(self->str_index < 1){
+		if(self->str_index < 1){
           print("At least msgid shall be inputed\n", 0);
         }else{
           can_msg.msgId = (self->str_buff[0]) & 0x7F;
@@ -371,7 +384,7 @@ void reader(App *self, int c) {
           can_msg.buff[self->str_index-1] = 0;
           self->str_index = 0;
           CAN_SEND(&can0, &can_msg);
-        }
+        }	
         break;
       default:
         self->str_buff[self->str_index++] = c;
@@ -395,6 +408,7 @@ void reader(App *self, int c) {
         print("<int>k: changes the playing key to <int>\n",0);
         print("q: enables/disables deadlines\n",0);
         print("<int>t: executes an isolated task <int> times and prints max and avg WCET.\n",0);
+		can_write(&app, c);
         break;
       case 'g':
         self->conductor_mode = 0;
@@ -406,9 +420,11 @@ void reader(App *self, int c) {
         break;
       case 'm'://mute
         SYNC(&obj_dac, DAC_mute, 0);
+		can_write(&app, c);
         break;
       case 'b': // set bpms
         self->str_buff[self->str_index] = '\0';
+		can_write(&app, c);
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         if(bufferValue < 60){
@@ -426,13 +442,16 @@ void reader(App *self, int c) {
         print("Starting to play the song\n", 0);
         SYNC(&mel_obj, Mel_kill, 0);
         ASYNC(&mel_obj, play_song_funct, 0);
+		can_write(&app, c);
         break;
       case 'x':
         SYNC(&mel_obj, Mel_kill, 1);
         print("Stop the song\n", 0);
+		can_write(&app, c);
         break;
       case 'h'://press h to set the freq in heartz
         self->str_buff[self->str_index] = '\0';
+		can_write(&app, c);
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         if (bufferValue<0){
@@ -445,13 +464,16 @@ void reader(App *self, int c) {
       case 'u'://press u to increase the loop range
         bufferValue = SYNC(&load, add_loop_range, 0);
         print("Increasing loop range to %d\n", bufferValue);
+		can_write(&app, c);
         break;
       case 'd'://press d to decreaset the loop range
         bufferValue = SYNC(&load, sub_loop_range, 0);
         print("Decreasing loop range to %d\n", bufferValue);
+		can_write(&app, c);
         break;
       case 'v'://press v to confirm volume change
         self->str_buff[self->str_index] = '\0';
+		can_write(&app, c);
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         if (bufferValue<1){
@@ -466,6 +488,7 @@ void reader(App *self, int c) {
         break;
       case 'k':
         self->str_buff[self->str_index] = '\0';
+		can_write(&app, c);
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         if (bufferValue < -5){
@@ -488,6 +511,7 @@ void reader(App *self, int c) {
         break;
       case 't':
         self->str_buff[self->str_index] = '\0';
+		can_write(&app, c);
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         print("Measuring background task exec time for %d loop executions\n", bufferValue);
@@ -520,10 +544,12 @@ void reader(App *self, int c) {
         tot_tim = USEC_OF(CURRENT_OFFSET()) - global_start_tim;
         print("Max time per task: %d ns.\n", max_tim);
         print("Avg time per task: %d ns.\n", tot_tim/bufferValue);
+		can_write(&app, c);
         break;
       case 'q'://enable and disable deadlines
         SYNC(&obj_dac, dac_deadline, 0);
         SYNC(&load, load_deadline, 0);
+		can_write(&app, c);
         break;
       default:
         self->str_buff[self->str_index++] = c;
