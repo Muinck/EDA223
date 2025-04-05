@@ -110,34 +110,34 @@ void DAC_set_vol(DAC_obj *self, int vol){
   self->volume = vol;
 }
 
-void DAC_mute(DAC_obj *self, int dummy){
-  if(self->muted == 1){
-    self->muted = 0;
-    print("DAC unmuted", 0);
-  }else{
-    self->muted = 1;
-	print("DAC muted", 0);
-	AFTER(SEC(5), self, print_muted, 0);
-  }
-}
-
 void DAC_mute_print_en(DAC_obj *self, int p_en){
   if(self->mut_print_en == 1){
     self->mut_print_en = 0;
-    print("DAC mute state printing disabled", 0);
+    print("DAC mute state printing disabled\n", 0);
   }else{
     self->mut_print_en = 1;
-	print("DAC mute state printing enabled", 0);
+	print("DAC mute state printing enabled\n", 0);
   };
 }
 
 void print_muted(DAC_obj *self, int dummy){
 	if(self->muted==1){
 		if(self->mut_print_en==1){
-			print("DAC muted");
+			print("DAC muted\n", 0);
 		}
 		AFTER(SEC(5), self, print_muted, 0);
 	}
+}
+
+void DAC_mute(DAC_obj *self, int dummy){
+  if(self->muted == 1){
+    self->muted = 0;
+    print("DAC unmuted\n", 0);
+  }else{
+    self->muted = 1;
+	print("DAC muted\n", 0);
+	AFTER(SEC(5), self, print_muted, 0);
+  }
 }
 
 void DAC_gap(DAC_obj *self, int gap){
@@ -191,14 +191,14 @@ void play_song_funct(Mel_obj *self, int in){
 }
 
 void receiver(App *self, int unused) {
-  CANMsg msg;
-  int bufferValue;
-  CAN_RECEIVE(&can0, &msg);
-  SCI_WRITE(&sci0, "Can msg: ");
-  print("MSG_ID: %c MSG_DAT: ", msg.msgId);
-  SCI_WRITE(&sci0, msg.buff);
-  SCI_WRITE(&sci0, "\n");
-  char id_sw = msg.msgId;
+	CANMsg msg;
+	int bufferValue;
+	CAN_RECEIVE(&can0, &msg);
+	SCI_WRITE(&sci0, "Can msg: ");
+	print("MSG_ID: %c MSG_DAT: ", msg.msgId);
+	SCI_WRITE(&sci0, msg.buff);
+	SCI_WRITE(&sci0, "\n");
+	char id_sw = msg.msgId;
 
   if(self->conductor_mode == 0){
     // TOOD similar switch as conductor mode
@@ -353,13 +353,13 @@ void reader(App *self, int c) {
 				SYNC(&mel_obj, Mel_kill, 1);
 				print("Now in musician mode\n", 0);
 				break;
-      case 'c':
-        self->can_mode = 1;
-        break;
-      case 'm'://mute
-        SYNC(&obj_dac, DAC_mute, 0);
-        can_write(&app, c);
-        break;
+		    case 'c':
+			  self->can_mode = 1;
+			  break;
+		    case 'm'://mute
+			  SYNC(&obj_dac, DAC_mute, 0);
+			  can_write(&app, c);
+				break;
 			case 'b': // set bpms
 				self->str_buff[self->str_index] = '\0';
 				can_write(&app, c);
