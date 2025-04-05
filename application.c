@@ -50,17 +50,17 @@ typedef struct {
   int int_index;
   int int_count;
   int can_mode;       // app will receive str for can msg
-  int conductor_mode; // when conductor mode == 1 this board controls the other ones
-                      // when mussician (not conductor == 0) plays what it receives
+  int conductor_mode; // when conductor_mode == 1 this board controls the other ones
+                      // when musician (conductor_mode == 0) plays what it receives
 } App;
 
 typedef struct {
   Object super;
   int volume;
   int muted;
+  int mut_print_en;
   int gap;
   int period;
-  int d_deadline;
   int play;
 } DAC_obj;
 
@@ -73,14 +73,8 @@ typedef struct {
   int mel_idx;
 } Mel_obj;
 
-typedef struct {
-  Object super;
-  int loop_range;
-	int l_deadline;
-} loop_load;
-
 #define initApp() { initObject(), {}, 0, {}, 0, 0, 0, 1}
-#define initDAC() { initObject(), 3, 0, 0, 500, 0, 0}
+#define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
 #define initMel() { initObject(), 60000000/120, 50, 0, 0, 0}
 
@@ -90,7 +84,6 @@ void receiver(App*, int);
 App app = initApp();
 DAC_obj obj_dac = initDAC();
 Mel_obj mel_obj = initMel();
-loop_load load = initload();
 Serial sci0 = initSerial(SCI_PORT0, &app, reader);
 
 Can can0 = initCan(CAN_PORT0, &app, receiver);
@@ -105,63 +98,12 @@ int bpm2tempo(int bpm){
   return 60000000/bpm; // us
 }
 
-void measure_empty_loop(loop_load *self, int unused){	
-	for(int i=0; i<self->loop_range; i++){
-	}
-}
-
-void measure_tonegen(DAC_obj *self){	
-	if(self->play == 0 || self->muted == 1){
-		*DAC_wr_pointer = 0;
-		self->play = 1;
-	}else{
-		*DAC_wr_pointer = self->volume;
-		self->play = 0;
-	}
-}
-
-int add_loop_range(loop_load *self, int dummy){
-  self->loop_range = self->loop_range + 500;
-  return self->loop_range;
-}
-int sub_loop_range(loop_load *self, int dummy){
-	if(self->loop_range >= 500)
-    self->loop_range = self->loop_range - 500;
-  return self->loop_range;
-}
-
-void empty_loop(loop_load *self, int unused){	
-	for(int i=0; i<self->loop_range; i++){
-	}
-	if (self->l_deadline==0)
-		AFTER(USEC(1300), self, empty_loop, 0);
-	else
-		SEND(USEC(1300), USEC(1300), self, empty_loop, 0);
-}
-
-void dac_deadline(DAC_obj *self, int unused){
-	if (self->d_deadline==0)
-		self->d_deadline=1;
-	else
-		self->d_deadline=0;
-}
-
 void mel_set_tempo(Mel_obj *self, int tempo){
   self->tempo = bpm2tempo(tempo);
 }
 
 void mel_set_key(Mel_obj *self, int key){
   self->key = key;
-}
-
-void load_deadline(loop_load *self, int unused){
-	if (self->l_deadline==0){
-		self->l_deadline=1;
-		print("Deadlines enabled.\n",0);
-	}else{
-		self->l_deadline=0;
-		print("Deadlines disabled.\n",0);
-	}
 }
 
 void DAC_set_vol(DAC_obj *self, int vol){
@@ -171,11 +113,31 @@ void DAC_set_vol(DAC_obj *self, int vol){
 void DAC_mute(DAC_obj *self, int dummy){
   if(self->muted == 1){
     self->muted = 0;
-    print("DAC muted", 0);
-  }else{
     print("DAC unmuted", 0);
+  }else{
     self->muted = 1;
+	print("DAC muted", 0);
+	AFTER(SEC(5), self, print_muted, 0);
   }
+}
+
+void DAC_mute_print_en(DAC_obj *self, int p_en){
+  if(self->mut_print_en == 1){
+    self->mut_print_en = 0;
+    print("DAC mute state printing disabled", 0);
+  }else{
+    self->mut_print_en = 1;
+	print("DAC mute state printing enabled", 0);
+  };
+}
+
+void print_muted(DAC_obj *self, int dummy){
+	if(self->muted==1){
+		if(self->mut_print_en==1){
+			print("DAC muted");
+		}
+		AFTER(SEC(5), self, print_muted, 0);
+	}
 }
 
 void DAC_gap(DAC_obj *self, int gap){
@@ -184,11 +146,6 @@ void DAC_gap(DAC_obj *self, int gap){
 
 void Mel_kill(Mel_obj *self, int kill){
   self->kill = kill;
-}
-
-void DAC_set_freq(DAC_obj *self, int freq){
-  int period = 1000000/(2*freq);
-  self->period = period;
 }
 
 void DAC_set_period(DAC_obj *self, int period){
@@ -204,9 +161,6 @@ void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
     *DAC_wr_pointer = self->volume;
     next = 0;
   }
-  if (self->d_deadline==0)
-  AFTER(USEC(self->period), self, DAC_wr, next);
-	else
   SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
 }
 
@@ -297,16 +251,6 @@ void receiver(App *self, int unused) {
         SYNC(&mel_obj, Mel_kill, 1);
         print("Stop the song\n", 0);
         break;
-      case 'h'://press h to set the freq in heartz
-        msg.buff[msg.length] = '\0';
-        bufferValue = atoi(msg.buff);
-        if (bufferValue<0){
-          bufferValue=0;
-          print("Minimum freq is 0 heartzs",0);
-        }
-        SYNC(&obj_dac, DAC_set_freq, bufferValue);
-        print("Setting DAC frequency to %d\n", bufferValue);
-        break;
       case 'v'://press v to confirm volume change
         msg.buff[msg.length] = '\0';
         bufferValue = atoi(msg.buff);
@@ -346,10 +290,9 @@ void can_write(App *self, int id){
     can_msg.msgId = id & 0x7F;
     can_msg.nodeId = can_node_id;
     can_msg.length = self->str_index;
-    for( int i = 0; i <= self->str_index-1; i++){
+    for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
 	}
-    can_msg.buff[self->str_index] = 0;
     self->str_index = 0;
     CAN_SEND(&can0, &can_msg);
 }
@@ -366,215 +309,109 @@ void reader(App *self, int c) {
     if (c == '\n')
       return;
     print("Rcv: '%c'\n", c);
-  }
-  if(self->can_mode == 1){
-    switch (c)
-    {
-      case 'e':
-        self->can_mode = 0;
-		if(self->str_index < 1){
-          print("At least msgid shall be inputed\n", 0);
-        }else{
-          can_msg.msgId = (self->str_buff[0]) & 0x7F;
-          can_msg.nodeId = can_node_id;
-          can_msg.length = self->str_index-1;
-          for( int i = 0; i < self->str_index-1; i++){
-            can_msg.buff[i] = self->str_buff[i+1];
-          }
-          can_msg.buff[self->str_index-1] = 0;
-          self->str_index = 0;
-          CAN_SEND(&can0, &can_msg);
-        }	
-        break;
-      default:
-        self->str_buff[self->str_index++] = c;
-        break;
-    }
-
-  }else if(self->conductor_mode == 1){
-    switch (c) {
-      case 'p':
-        print("p: shows this message\n",0);
-        print("c<str>e: shows this message\n",0);
-        print("g: change to musician mode\n",0);
-        print("m: mutes the DAC\n",0);
-        print("h: sets the frequency of the DAC in hz\n",0);
-        print("u: increases loop range by 500\n",0);
-        print("d: decreases loop range by 500\n",0);
-        print("<int>v: sets the volume to <int>\n",0);
-        print("<int>b: sets the bpms of the song\n",0);
-        print("s: starts playing the song\n",0);
-        print("x: stops playing the song\n",0);
-        print("<int>k: changes the playing key to <int>\n",0);
-        print("q: enables/disables deadlines\n",0);
-        print("<int>t: executes an isolated task <int> times and prints max and avg WCET.\n",0);
-		can_write(&app, c);
-        break;
-      case 'g':
-        self->conductor_mode = 0;
-        SYNC(&mel_obj, Mel_kill, 1);
-        print("Now in musician mode\n", 0);
-        break;
-      case 'c':
-        self->can_mode = 1;
-        break;
-      case 'm'://mute
-        SYNC(&obj_dac, DAC_mute, 0);
-		can_write(&app, c);
-        break;
-      case 'b': // set bpms
-        self->str_buff[self->str_index] = '\0';
-		can_write(&app, c);
-        self->str_index = 0;
-        bufferValue = atoi(self->str_buff);
-        if(bufferValue < 60){
-          print("Minimum bpms is 60\n", 0);
-          bufferValue = 60;
-        }else if (bufferValue > 240){
-          print("Maximun value is 240\n", 0);
-          bufferValue = 240;
-        }
-        
-        SYNC(&mel_obj, mel_set_tempo, bufferValue);
-        print("Bpms setted to %d\n", bufferValue);
-        break;
-      case 's': //start the song
-        print("Starting to play the song\n", 0);
-        SYNC(&mel_obj, Mel_kill, 0);
-        ASYNC(&mel_obj, play_song_funct, 0);
-		can_write(&app, c);
-        break;
-      case 'x':
-        SYNC(&mel_obj, Mel_kill, 1);
-        print("Stop the song\n", 0);
-		can_write(&app, c);
-        break;
-      case 'h'://press h to set the freq in heartz
-        self->str_buff[self->str_index] = '\0';
-		can_write(&app, c);
-        self->str_index = 0;
-        bufferValue = atoi(self->str_buff);
-        if (bufferValue<0){
-          bufferValue=0;
-          print("Minimum freq is 0 heartzs",0);
-        }
-        SYNC(&obj_dac, DAC_set_freq, bufferValue);
-        print("Setting DAC frequency to %d\n", bufferValue);
-        break;
-      case 'u'://press u to increase the loop range
-        bufferValue = SYNC(&load, add_loop_range, 0);
-        print("Increasing loop range to %d\n", bufferValue);
-		can_write(&app, c);
-        break;
-      case 'd'://press d to decreaset the loop range
-        bufferValue = SYNC(&load, sub_loop_range, 0);
-        print("Decreasing loop range to %d\n", bufferValue);
-		can_write(&app, c);
-        break;
-      case 'v'://press v to confirm volume change
-        self->str_buff[self->str_index] = '\0';
-		can_write(&app, c);
-        self->str_index = 0;
-        bufferValue = atoi(self->str_buff);
-        if (bufferValue<1){
-          bufferValue=1;
-          print("Minimum volume is 1",0);
-        }else if (bufferValue>200){
-          bufferValue=200;
-          print("Maximum volume is 200",0);
-        }
-        print("Volume set to: %d\n", bufferValue);
-        SYNC(&obj_dac, DAC_set_vol, bufferValue);
-        break;
-      case 'k':
-        self->str_buff[self->str_index] = '\0';
-		can_write(&app, c);
-        self->str_index = 0;
-        bufferValue = atoi(self->str_buff);
-        if (bufferValue < -5){
-          bufferValue=-5;
-          print("Minimum key is -5\n",0);
-        }else if (bufferValue>5){
-          bufferValue=5;
-          print("Maximum key is 5\n",0);
-        }
-
-        SYNC(&mel_obj, mel_set_key, bufferValue);
-        print("Key: %d\n", bufferValue);
-
-        // for(int i = 0; i < 32; i++){
-        //   print("%d", per_array[freq_idx_2_arr(melody_notes[i] + bufferValue)]);
-        //   if(i != 31)
-        //     print(", ",0);
-        // }
-        // print("\n", 0);
-        break;
-      case 't':
-        self->str_buff[self->str_index] = '\0';
-		can_write(&app, c);
-        self->str_index = 0;
-        bufferValue = atoi(self->str_buff);
-        print("Measuring background task exec time for %d loop executions\n", bufferValue);
-        tot_tim = 0;
-        max_tim=0;
-        for(int i = 0; i < bufferValue; i++){
-          start_tim = USEC_OF(CURRENT_OFFSET());
-          SYNC(&load, measure_empty_loop, 0);
-              end_tim = USEC_OF(CURRENT_OFFSET());
-              tot_tim += end_tim - start_tim;
-          max_tim = MAX(max_tim, end_tim - start_tim);
-        }
-        print("Max time per loop: %d us.\n", max_tim);
-        print("Avg time per loop: %d us.\n", tot_tim/bufferValue);
-        
-        print("Measuring tone generator exec time for %d loop executions\n", bufferValue);
-        
-        tot_tim = 0;
-        max_tim=0;
-        tot_tim = 0;
-        global_start_tim=USEC_OF(CURRENT_OFFSET());
-        for (int j=0; j<bufferValue; j++){
-          start_tim = USEC_OF(CURRENT_OFFSET());
-          for(int i = 0; i < 1000; i++){
-            measure_tonegen(&obj_dac);
-          }
-          end_tim = USEC_OF(CURRENT_OFFSET());
-          max_tim = MAX(max_tim, end_tim - start_tim);
-        }
-        tot_tim = USEC_OF(CURRENT_OFFSET()) - global_start_tim;
-        print("Max time per task: %d ns.\n", max_tim);
-        print("Avg time per task: %d ns.\n", tot_tim/bufferValue);
-		can_write(&app, c);
-        break;
-      case 'q'://enable and disable deadlines
-        SYNC(&obj_dac, dac_deadline, 0);
-        SYNC(&load, load_deadline, 0);
-		can_write(&app, c);
-        break;
-      default:
-        self->str_buff[self->str_index++] = c;
-        break;
-    }
-  }else{ // musician mode
-    switch (c) {
-      case 'p':
-        print("p: shows this message\n",0);
-        print("g: change to conductor mode\n",0);
-        print("c<str>e: shows this message\n",0);
-        break;
-      case 'g':
-        self->conductor_mode = 1;
-        SYNC(&mel_obj, Mel_kill, 1);
-        print("Now in  conductor mode\n", 0);
-        break;
-      case 'c':
-        self->can_mode = 1;
-        break;
-      default:
-        self->str_buff[self->str_index++] = c;
-        break;
-    }
-  }
+	}
+	if(self->conductor_mode == 1){//conductor mode
+		switch (c) {
+			case 'p':
+				print("p: shows this message\n",0);
+				print("g: change to musician mode\n",0);
+				print("<int>v: sets the volume to <int>\n",0);
+				print("<int>b: sets the bpms of the song\n",0);
+				print("s: starts playing the song\n",0);
+				print("x: stops playing the song\n",0);
+				print("<int>k: changes the playing key to <int>\n",0);
+				print("q: enables/disables deadlines\n",0);
+				can_write(&app, c);
+				break;
+			case 'g':
+				self->conductor_mode = 0;
+				SYNC(&mel_obj, Mel_kill, 1);
+				print("Now in musician mode\n", 0);
+				break;
+			case 'b': // set bpms
+				self->str_buff[self->str_index] = '\0';
+				can_write(&app, c);
+				self->str_index = 0;
+				bufferValue = atoi(self->str_buff);
+				if(bufferValue < 60){
+				  print("Minimum bpms is 60\n", 0);
+				  bufferValue = 60;
+				}else if (bufferValue > 240){
+				  print("Maximun value is 240\n", 0);
+				  bufferValue = 240;
+				}			
+				SYNC(&mel_obj, mel_set_tempo, bufferValue);
+				print("Bpms setted to %d\n", bufferValue);
+				break;
+			case 's': //start the song
+				print("Starting to play the song\n", 0);
+				SYNC(&mel_obj, Mel_kill, 0);
+				ASYNC(&mel_obj, play_song_funct, 0);
+				can_write(&app, c);
+				break;
+			case 'x':
+				SYNC(&mel_obj, Mel_kill, 1);
+				print("Stop the song\n", 0);
+				can_write(&app, c);
+				break;
+			case 'v'://press v to confirm volume change
+				self->str_buff[self->str_index] = '\0';
+				can_write(&app, c);
+				self->str_index = 0;
+				bufferValue = atoi(self->str_buff);
+				if (bufferValue<1){
+				  bufferValue=1;
+				  print("Minimum volume is 1",0);
+				}else if (bufferValue>200){
+				  bufferValue=200;
+				  print("Maximum volume is 200",0);
+				}
+				print("Volume set to: %d\n", bufferValue);
+				SYNC(&obj_dac, DAC_set_vol, bufferValue);
+				break;
+			case 'k':
+				self->str_buff[self->str_index] = '\0';
+				can_write(&app, c);
+				self->str_index = 0;
+				bufferValue = atoi(self->str_buff);
+				if (bufferValue < -5){
+				  bufferValue=-5;
+				  print("Minimum key is -5\n",0);
+				}else if (bufferValue>5){
+				  bufferValue=5;
+				  print("Maximum key is 5\n",0);
+				}
+				SYNC(&mel_obj, mel_set_key, bufferValue);
+				print("Key: %d\n", bufferValue);
+				break;
+			default:
+				self->str_buff[self->str_index++] = c;
+				break;
+		}
+	}else{ // musician mode
+		switch (c) {
+		  case 'p':
+			print("p: shows this message\n",0);
+			print("g: change to conductor mode\n",0);
+			print("t: mutes/unmutes song\n",0);
+			print("m: enables/disables mute state printing\n",0);
+			break;
+		  case 'g':
+			self->conductor_mode = 1;
+			SYNC(&mel_obj, Mel_kill, 1);
+			print("Now in conductor mode\n", 0);
+			break;
+		case 't'://mute
+			SYNC(&obj_dac, DAC_mute, 0);
+			break;
+		case 'm'://enable or disabled mute state printing
+			SYNC(&obj_dac, DAC_mute_print_en, 0);
+			break;
+		  default:
+			self->str_buff[self->str_index++] = c;
+			break;
+		}
+	}
 }
 
 void startApp(App *self, int arg) {
