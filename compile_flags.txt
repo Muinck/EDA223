@@ -1,4 +1,4 @@
--IC:\Users\vmeli\Documents\GitHub\EDA223
--IC:\Users\vmeli\Documents\GitHub\EDA223\device\inc
--IC:\Users\vmeli\Documents\GitHub\EDA223\driver\inc
+-IC:\Users\pepit\Documents\EDA223
+-IC:\Users\pepit\Documents\EDA223\device\inc
+-IC:\Users\pepit\Documents\EDA223\driver\inc
 -DSTM32F40_41xxx

@@ -11,7 +11,8 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-const bool VERBOSE = true;
+const bool VERBOSE = false;
+const int  c_nodeId = 15;
 
 const int DAC_WR_ADDR = DAC_Trigger_T5_TRGO + DAC_BASE;
 #define DAC_wr_pointer ((volatile unsigned char *)0x4000741C)
@@ -47,11 +48,16 @@ typedef struct {
   char str_buff[128];
   int str_index;
   int int_buff[3];
-  int int_index;
-  int int_count;
+  // int int_index;
+  // int int_count;
   int can_mode;       // app will receive str for can msg
   int conductor_mode; // when conductor_mode == 1 this board controls the other ones
                       // when musician (conductor_mode == 0) plays what it receives
+
+  bool validBoard[8];
+  int boardId[8];
+  int currentConductor;
+  int validSiz;
 } App;
 
 typedef struct {
@@ -71,12 +77,14 @@ typedef struct {
   int key;
   int kill;
   int mel_idx;
+  int myModulo; //so the app knows in which modulo to play
+  int validSiz;
 } Mel_obj;
 
-#define initApp() { initObject(), {}, 0, {}, 0, 0, 0, 1}
+#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, 0, 1}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
-#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0}
+#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 1}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -175,108 +183,211 @@ void play_song_funct(Mel_obj *self, int in){
   }
   if(in == 0){
     // set new tone
-    SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx] + self->key)]);
+    SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx%32] + self->key)]);
     // unmute
-    SYNC(&obj_dac, DAC_gap, 0);
+    if((self->mel_idx % self->validSiz) == self->myModulo){
+      SYNC(&obj_dac, DAC_gap, 0);
+    }
 		// after call for tempo - gap    
-    AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
+    AFTER(USEC(((self->tempo*note_dur[self->mel_idx%32])-(self->gap_siz*1000))), self, play_song_funct, 1);
   }else{
     // mute
     SYNC(&obj_dac, DAC_gap, 1);
     // update index
-    self->mel_idx = (self->mel_idx+1)%32;
+    self->mel_idx++;
     //after call for gap
     AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
   }
 }
 
+bool inTheList(int id, const int boardId[8], const bool validBoard[8]) {
+  for (int i = 0; i < 8; ++i) {
+      if (boardId[i] == id && validBoard[i]) {
+          return true; 
+      }
+  }
+  return false; // not found
+}
+int listPos(int id, const int boardId[8], const bool validBoard[8]) {
+  for (int i = 0; i < 8; ++i) {
+      if (boardId[i] == id && validBoard[i]) {
+          return i; 
+      }
+  }
+  return -1; // not found
+}
+void sortValidBoards(int boardId[8], const bool validBoard[8]) {
+  // Step 1: Extract valid boardIds
+  int validIds[8];
+  int count = 0;
+  
+  for (int i = 0; i < 8; ++i) {
+      if (validBoard[i]) {
+          validIds[count++] = boardId[i];
+      }
+  }
+
+  // Step 2: Insertion sort on validIds
+  for (int i = 1; i < count; ++i) {
+      int key = validIds[i];
+      int j = i - 1;
+      while (j >= 0 && validIds[j] > key) {
+          validIds[j + 1] = validIds[j];
+          j--;
+      }
+      validIds[j + 1] = key;
+  }
+
+  // Step 3: Put sorted validIds back into boardId
+  int index = 0;
+  for (int i = 0; i < 8; ++i) {
+      if (validBoard[i]) {
+          boardId[i] = validIds[index++];
+      }
+  }
+}
+
+void setModulo(Mel_obj *self, int newMod){
+  self->myModulo = newMod;
+}
+
+void setNewSiz(Mel_obj *self, int newSiz){
+  self->validSiz = newSiz;
+}
+
+// receives messages from CAN
 void receiver(App *self, int unused) {
 	CANMsg msg;
 	int bufferValue;
 	CAN_RECEIVE(&can0, &msg);
-	SCI_WRITE(&sci0, "Can msg: ");
-	print("MSG_ID: %c MSG_DAT: ", msg.msgId);
-	SCI_WRITE(&sci0, msg.buff);
-	SCI_WRITE(&sci0, "\n");
-	char id_sw = msg.msgId;
+  char id_sw = msg.msgId;
 
+  if(VERBOSE){ //print receiving stuff
+    SCI_WRITE(&sci0, "Can msg: ");
+    print("MSG_ID: %c MSG_DAT: ", msg.msgId);
+    SCI_WRITE(&sci0, msg.buff);
+    SCI_WRITE(&sci0, "\n");
+  }
+
+  // While in MUSICIAN mode:
   if(self->conductor_mode == 0){
     // TOOD similar switch as conductor mode
-    // m: mutes the DAC\n"
-    // h: sets the frequency of the DAC in hz\n"
-    // u: increases loop range by 500\n"
-    // d: decreases loop range by 500\n"
-    // <int>v: sets the volume to <int>\n"
-    // <int>b: sets the bpms of the song\n"
-    // s: starts playing the song\n"
-    // x: stops playing the song\n"
-    // <int>k: changes the playing key to <int>\n"
+    // <int>B: sets the bpms of the song\n"
+    // S: starts playing the song\n"
+    // X: stops playing the song\n"
+    // <int>K: changes the playing key to <int>\n"
     switch (id_sw) {
-      case 'p':
+      case 'A':
+        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
+          self->validBoard[self->validSiz] = true;
+          self->boardId[self->validSiz] = msg.nodeId;
+          self->validSiz++;
+          sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
+          //set modulo that this board will play
+          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+          SYNC(&mel_obj, setNewSiz, self->validSiz);
+          print("New Board added with nodeId: %d\n", msg.nodeId);
+          if(VERBOSE){
+            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+            print("Total number of boards: %d\n",self->validSiz);
+          }
+        }
+        break;
+      case 'C':
+        print("%d nodeId claimed conductor\n", msg.nodeId);
+        self->currentConductor = msg.nodeId;
+        self->conductor_mode = 0;
+        break;
+      case 'h':
         print("CAN protocol expects the msgId to be one of the following:\n", 0);
         print("When data needs to be provided, it shall be done in str format in the msg:\n\n", 0);
-        print("m: mutes the DAC\n", 0);
-        print("h: sets the frequency of the DAC in hz\n", 0);
-        print("u: increases loop range by 500\n", 0);
-        print("d: decreases loop range by 500\n", 0);
-        print("<int>v: sets the volume to <int>\n", 0);
-        print("<int>b: sets the bpms of the song\n", 0);
-        print("s: starts playing the song\n", 0);
-        print("x: stops playing the song\n", 0);
-        print("<int>k: changes the playing key to <int>\n", 0);
+        print("h: shows this message\n", 0);
+        print("<int>B: sets the bpms of the song\n", 0);
+        print("S: starts playing the song\n", 0);
+        print("X: stops playing the song\n", 0);
+        print("<int>K: changes the playing key to <int>\n", 0);
         break;
-      case 'm'://mute
-        SYNC(&obj_dac, DAC_mute, 0);
-        break;
-      case 'b': // set bpms
-        msg.buff[msg.length] = '\0';
-        bufferValue = atoi(msg.buff);
-        if(bufferValue < 60){
-          print("Minimum bpms is 60\n", 0);
-          bufferValue = 60;
-        }else if (bufferValue > 240){
-          print("Maximun value is 240\n", 0);
-          bufferValue = 240;
+      case 'B': // set bpms
+        if(msg.nodeId == self->currentConductor){
+          msg.buff[msg.length] = '\0';
+          bufferValue = atoi((char*)msg.buff);
+          if(bufferValue < 30){
+            print("Minimum bpms is 30\n", 0);
+            bufferValue = 30;
+          }else if (bufferValue > 240){
+            print("Maximun value is 240\n", 0);
+            bufferValue = 240;
+          }
+          
+          SYNC(&mel_obj, mel_set_tempo, bufferValue);
+          print("Bpms setted to %d\n", bufferValue);
+        }else{
+          print("Musician trying to set BMPs, ignored\n", 0);
         }
-        
-        SYNC(&mel_obj, mel_set_tempo, bufferValue);
-        print("Bpms setted to %d\n", bufferValue);
         break;
-      case 's': //start the song
-        print("Starting to play the song\n", 0);
-        SYNC(&mel_obj, Mel_kill, 0);
-        ASYNC(&mel_obj, play_song_funct, 0);
-        break;
-      case 'x':
-        SYNC(&mel_obj, Mel_kill, 1);
-        print("Stop the song\n", 0);
-        break;
-      case 'v'://press v to confirm volume change
-        msg.buff[msg.length] = '\0';
-        bufferValue = atoi(msg.buff);
-        if (bufferValue<1){
-          bufferValue=1;
-          print("Minimum volume is 1",0);
-        }else if (bufferValue>200){
-          bufferValue=200;
-          print("Maximum volume is 200",0);
+      case 'P': //start the song
+        if(msg.nodeId == self->currentConductor){
+          print("Starting to play the song\n", 0);
+          SYNC(&mel_obj, Mel_kill, 0);
+          ASYNC(&mel_obj, play_song_funct, 0);
+          break;
+        }else{
+          print("Musician trying to start the song, ignored\n", 0);
         }
-        print("Volume set to: %d\n", bufferValue);
-        SYNC(&obj_dac, DAC_set_vol, bufferValue);
-        break;
-      case 'k':
-        msg.buff[msg.length] = '\0';
-        bufferValue = atoi(msg.buff);
-        if (bufferValue < -5){
-          bufferValue=-5;
-          print("Minimum key is -5\n",0);
-        }else if (bufferValue>5){
-          bufferValue=5;
-          print("Maximum key is 5\n",0);
+      case 'X':
+        if(msg.nodeId == self->currentConductor){
+          SYNC(&mel_obj, Mel_kill, 1);
+          print("Stop the song\n", 0); 
+        }else{
+          print("Musician trying to stop the song, ignored\n", 0);
         }
+        break;
+      case 'K':
+        if(msg.nodeId == self->currentConductor){
+          msg.buff[msg.length] = '\0';
+          bufferValue = atoi((char*)msg.buff);
+          if (bufferValue < -5){
+            bufferValue=-5;
+            print("Minimum key is -5\n",0);
+          }else if (bufferValue>5){
+            bufferValue=5;
+            print("Maximum key is 5\n",0);
+          }
 
-        SYNC(&mel_obj, mel_set_key, bufferValue);
-        print("Key: %d\n", bufferValue);
+          SYNC(&mel_obj, mel_set_key, bufferValue);
+          print("Key: %d\n", bufferValue); 
+        }else{
+          print("Musician trying to set KEY, ignored\n", 0);
+        }
+        break;
+      default:
+        print("Msg id not recognized\n", 0);
+        break;
+    }
+  }else{
+    switch (id_sw) {
+      case 'A':
+        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
+          self->validBoard[self->validSiz] = true;
+          self->boardId[self->validSiz] = msg.nodeId;
+          self->validSiz++;
+          sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
+          //set modulo that this board will play
+          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+          print("New Board added with nodeId: %d\n", msg.nodeId);
+          if(VERBOSE){
+            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+            print("Total number of boards: %d\n",self->validSiz);
+          }
+        }
+        break;
+      case 'C':
+        //if in conductor change back to mussician and give them control
+        if(self->conductor_mode != 0){
+          self->conductor_mode = 0;
+          self->currentConductor = msg.nodeId;
+          print("Giving conductor control, now in MUSICIAN mode\n", 0);
+        }
         break;
       default:
         print("Msg id not recognized\n", 0);
@@ -287,22 +398,20 @@ void receiver(App *self, int unused) {
 
 void can_write(App *self, int id){
 	CANMsg can_msg;
-    can_msg.msgId = id & 0x7F;
-    can_msg.nodeId = can_node_id;
-    can_msg.length = self->str_index;
-    for(int i = 0; i <= self->str_index; i++){
+  can_msg.msgId = id & 0x7F;
+  can_msg.nodeId = c_nodeId;
+  can_msg.length = self->str_index;
+  for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
 	}
     self->str_index = 0;
     CAN_SEND(&can0, &can_msg);
 }
 
+// Keyboard 
 void reader(App *self, int c) {
   int bufferValue;
   CANMsg can_msg;
-  unsigned long long int start_tim, end_tim, global_start_tim;
-  unsigned long long int tot_tim;
-  unsigned long long int max_tim;  
   //CANMsg can_msg;
 
   if(VERBOSE){
@@ -316,7 +425,7 @@ void reader(App *self, int c) {
     {
       case 'e':
         self->can_mode = 0;
-		if(self->str_index < 1){
+		    if(self->str_index < 1){
           print("At least msgid shall be inputed\n", 0);
         }else{
           can_msg.msgId = (self->str_buff[0]) & 0x7F;
@@ -337,37 +446,39 @@ void reader(App *self, int c) {
 
   }else if(self->conductor_mode == 1){//conductor mode
 		switch (c) {
-			case 'p':
-				print("p: shows this message\n",0);
-				print("g: change to musician mode\n",0);
-				print("<int>v: sets the volume to <int>\n",0);
-				print("<int>b: sets the bpms of the song\n",0);
-				print("s: starts playing the song\n",0);
-				print("x: stops playing the song\n",0);
-				print("<int>k: changes the playing key to <int>\n",0);
-				print("q: enables/disables deadlines\n",0);
-				can_write(&app, c);
+			case 'h':
+				print("h: shows this message\n",0);
+				// print("G: change to musician mode\n",0); //For now the only way to change back is by other board to kick you out
+				print("<int>V: sets the volume to <int>\n",0);
+				print("<int>B: sets the bpms of the song\n",0);
+        print("c: debug can mode\n",0);
+				print("P: starts playing the song\n",0);
+        print("T: mutes/unmutes song\n",0);
+				print("X: stops playing the song\n",0);
+				print("<int>K: changes the playing key to <int>\n",0);
 				break;
-			case 'g':
-				self->conductor_mode = 0;
-				SYNC(&mel_obj, Mel_kill, 1);
-				print("Now in musician mode\n", 0);
-				break;
-		    case 'c':
+			// case 'G':
+			// 	self->conductor_mode = 0;
+			// 	SYNC(&mel_obj, Mel_kill, 1);
+			// 	print("Now in musician mode\n", 0);
+			// 	break;
+      case 'c':
 			  self->can_mode = 1;
 			  break;
-		    case 'm'://mute
-			  SYNC(&obj_dac, DAC_mute, 0);
-			  can_write(&app, c);
-				break;
-			case 'b': // set bpms
+      case 'T'://mute
+        SYNC(&obj_dac, DAC_mute, 0);
+        break;
+      case 'I'://enable or disabled mute state printing
+        SYNC(&obj_dac, DAC_mute_print_en, 0);
+        break;
+			case 'B': // set bpms
 				self->str_buff[self->str_index] = '\0';
 				can_write(&app, c);
 				self->str_index = 0;
 				bufferValue = atoi(self->str_buff);
-				if(bufferValue < 60){
-				  print("Minimum bpms is 60\n", 0);
-				  bufferValue = 60;
+				if(bufferValue < 30){
+				  print("Minimum bpms is 30\n", 0);
+				  bufferValue = 30;
 				}else if (bufferValue > 240){
 				  print("Maximun value is 240\n", 0);
 				  bufferValue = 240;
@@ -375,20 +486,19 @@ void reader(App *self, int c) {
 				SYNC(&mel_obj, mel_set_tempo, bufferValue);
 				print("Bpms setted to %d\n", bufferValue);
 				break;
-			case 's': //start the song
+			case 'P': //start the song
 				print("Starting to play the song\n", 0);
 				SYNC(&mel_obj, Mel_kill, 0);
 				ASYNC(&mel_obj, play_song_funct, 0);
 				can_write(&app, c);
 				break;
-			case 'x':
+			case 'X':
 				SYNC(&mel_obj, Mel_kill, 1);
 				print("Stop the song\n", 0);
 				can_write(&app, c);
 				break;
-			case 'v'://press v to confirm volume change
+			case 'V'://press v to confirm volume change
 				self->str_buff[self->str_index] = '\0';
-				can_write(&app, c);
 				self->str_index = 0;
 				bufferValue = atoi(self->str_buff);
 				if (bufferValue<1){
@@ -401,7 +511,7 @@ void reader(App *self, int c) {
 				print("Volume set to: %d\n", bufferValue);
 				SYNC(&obj_dac, DAC_set_vol, bufferValue);
 				break;
-			case 'k':
+			case 'K':
 				self->str_buff[self->str_index] = '\0';
 				can_write(&app, c);
 				self->str_index = 0;
@@ -422,25 +532,44 @@ void reader(App *self, int c) {
 		}
 	}else{ // musician mode
 		switch (c) {
-		  case 'p':
-        print("p: shows this message\n",0);
-        print("g: change to conductor mode\n",0);
-        print("t: mutes/unmutes song\n",0);
-        print("m: enables/disables mute state printing\n",0);
+		  case 'h':
+        print("h: shows this message\n",0);
+        print("C: claims conductor mode\n",0);
+        print("c: debug can mode\n",0);
+        print("T: mutes/unmutes song\n",0);
+        print("I: enables/disables mute state printing\n",0);
+        print("<int>V: sets the volume to <int>\n",0);
         break;
-		  case 'g':
-        self->conductor_mode = 1;
-        SYNC(&mel_obj, Mel_kill, 1);
-        print("Now in conductor mode\n", 0);
+		  case 'C':
+        self->conductor_mode = 1;        
+        can_msg.msgId = 'C';
+        can_msg.nodeId = c_nodeId;
+        can_msg.length = 0;
+        CAN_SEND(&can0, &can_msg);
+        print("Conductor mode claimed\n", 0);
         break;
       case 'c':
         self->can_mode = 1;
         break;
-      case 't'://mute
+      case 'T'://mute
         SYNC(&obj_dac, DAC_mute, 0);
         break;
-      case 'm'://enable or disabled mute state printing
+      case 'I'://enable or disabled mute state printing
         SYNC(&obj_dac, DAC_mute_print_en, 0);
+        break;
+      case 'V'://press v to confirm volume change
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if (bufferValue<1){
+          bufferValue=1;
+          print("Minimum volume is 1",0);
+        }else if (bufferValue>200){
+          bufferValue=200;
+          print("Maximum volume is 200",0);
+        }
+        print("Volume set to: %d\n", bufferValue);
+        SYNC(&obj_dac, DAC_set_vol, bufferValue);
         break;
       default:
         self->str_buff[self->str_index++] = c;
@@ -449,30 +578,26 @@ void reader(App *self, int c) {
 	}
 }
 
-void startApp(App *self, int arg) {
-  CANMsg msg;
+void send_ping(App *self, int dummy){
+	CANMsg can_msg;
+  can_msg.msgId = 'A';
+  can_msg.nodeId = c_nodeId;
+  can_msg.length = 0;
+  CAN_SEND(&can0, &can_msg);
 
+  // send ping every 100 ms all time
+  AFTER(MSEC(100), &self, send_ping, 0);
+}
+
+void startApp(App *self, int arg) {
   CAN_INIT(&can0);
   SCI_INIT(&sci0);
   SCI_WRITE(&sci0, "Hello, hello...\n");
 
-  msg.msgId = 1;
-  msg.nodeId = can_node_id;
-  msg.length = 6;
-  msg.buff[0] = 'H';
-  msg.buff[1] = 'e';
-  msg.buff[2] = 'l';
-  msg.buff[3] = 'l';
-  msg.buff[4] = 'o';
-  msg.buff[5] = 0;
-  CAN_SEND(&can0, &msg);
-
-// AFTER(USEC(1300), &load, empty_loop, 0);
   SYNC(&obj_dac, DAC_gap, 1);
   ASYNC(&obj_dac, DAC_wr, 1);
   SYNC(&mel_obj, Mel_kill, 0);
-  ASYNC(&mel_obj, play_song_funct, 0);
-
+  AFTER(USEC(100), &app, send_ping, 0);
 }
 
 int main() {
