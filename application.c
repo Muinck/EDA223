@@ -404,8 +404,8 @@ void can_write(App *self, int id){
   for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
 	}
-    self->str_index = 0;
-    CAN_SEND(&can0, &can_msg);
+  self->str_index = 0;
+  CAN_SEND(&can0, &can_msg);
 }
 
 // Keyboard 
@@ -470,6 +470,25 @@ void reader(App *self, int c) {
         break;
       case 'I'://enable or disabled mute state printing
         SYNC(&obj_dac, DAC_mute_print_en, 0);
+        break;
+      case 'R': // set bpms
+        SYNC(&mel_obj, mel_set_tempo, 120);
+        SYNC(&mel_obj, mel_set_key, 0);
+        print("Bpms and set tempo resetted, 120 and 0 values respectivly\n", 0);
+        can_msg.msgId = 'B';
+        can_msg.nodeId = c_nodeId;
+        can_msg.length = 3;
+        can_msg.buff[0] = '1';
+        can_msg.buff[1] = '2';
+        can_msg.buff[2] = '0';
+        can_msg.buff[3] = '\0';
+        CAN_SEND(&can0, &can_msg);
+        can_msg.msgId = 'K';
+        can_msg.nodeId = c_nodeId;
+        can_msg.length = 1;
+        can_msg.buff[0] = '0';
+        can_msg.buff[1] = '\0';
+        CAN_SEND(&can0, &can_msg);
         break;
 			case 'B': // set bpms
 				self->str_buff[self->str_index] = '\0';
