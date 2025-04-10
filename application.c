@@ -314,9 +314,9 @@ void receiver(App *self, int unused) {
           if(bufferValue < 30){
             print("Minimum bpms is 30\n", 0);
             bufferValue = 30;
-          }else if (bufferValue > 240){
-            print("Maximun value is 240\n", 0);
-            bufferValue = 240;
+          }else if (bufferValue > 300){
+            print("Maximun value is 300\n", 0);
+            bufferValue = 300;
           }
           
           SYNC(&mel_obj, mel_set_tempo, bufferValue);
@@ -479,9 +479,9 @@ void reader(App *self, int c) {
 				if(bufferValue < 30){
 				  print("Minimum bpms is 30\n", 0);
 				  bufferValue = 30;
-				}else if (bufferValue > 240){
-				  print("Maximun value is 240\n", 0);
-				  bufferValue = 240;
+				}else if (bufferValue > 300){
+				  print("Maximun value is 300\n", 0);
+				  bufferValue = 300;
 				}			
 				SYNC(&mel_obj, mel_set_tempo, bufferValue);
 				print("Bpms setted to %d\n", bufferValue);
