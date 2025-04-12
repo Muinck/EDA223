@@ -9,7 +9,7 @@
 #include <stdbool.h>
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
-#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 const bool VERBOSE = false;
 const int  c_nodeId = 15;
@@ -53,11 +53,14 @@ typedef struct {
   int can_mode;       // app will receive str for can msg
   int conductor_mode; // when conductor_mode == 1 this board controls the other ones
                       // when musician (conductor_mode == 0) plays what it receives
-
   bool validBoard[8];
   int boardId[8];
+  Msg removalTimers[8];
   int currentConductor;
   int validSiz;
+  int failureType;
+  int failureMode;
+  Msg failureTimer;
 } App;
 
 typedef struct {
@@ -81,7 +84,7 @@ typedef struct {
   int validSiz;
 } Mel_obj;
 
-#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, 0, 1}
+#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, 0, 1, 0, 0, NULL}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
 #define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 1}
@@ -172,6 +175,10 @@ void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
   SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
 }
 
+void* get_failure(App *self, int dummy){
+  return (void*)(intptr_t)(self->failureMode);
+}
+
 void play_song_funct(Mel_obj *self, int in){
   // 0 -> note, 1 -> gap
 
@@ -182,10 +189,11 @@ void play_song_funct(Mel_obj *self, int in){
     return;
   }
   if(in == 0){
+    int failure = (int)(intptr_t)SYNC(&app, get_failure, 0);
     // set new tone
     SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx%32] + self->key)]);
     // unmute
-    if((self->mel_idx % self->validSiz) == self->myModulo){
+    if((self->mel_idx % self->validSiz) == self->myModulo && failure == 0){
       SYNC(&obj_dac, DAC_gap, 0);
     }
 		// after call for tempo - gap    
@@ -216,33 +224,43 @@ int listPos(int id, const int boardId[8], const bool validBoard[8]) {
   }
   return -1; // not found
 }
-void sortValidBoards(int boardId[8], const bool validBoard[8]) {
-  // Step 1: Extract valid boardIds
+
+void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
   int validIds[8];
+  Msg validTimers[8];
   int count = 0;
-  
+
   for (int i = 0; i < 8; ++i) {
       if (validBoard[i]) {
-          validIds[count++] = boardId[i];
+          validIds[count] = boardId[i];
+          validTimers[count] = removalTimers[i];
+          count++;
       }
   }
 
-  // Step 2: Insertion sort on validIds
+  // Insertion sort
   for (int i = 1; i < count; ++i) {
       int key = validIds[i];
+      Msg timerKey = validTimers[i];
       int j = i - 1;
+
       while (j >= 0 && validIds[j] > key) {
           validIds[j + 1] = validIds[j];
+          validTimers[j + 1] = validTimers[j];
           j--;
       }
+
       validIds[j + 1] = key;
+      validTimers[j + 1] = timerKey;
   }
 
-  // Step 3: Put sorted validIds back into boardId
   int index = 0;
   for (int i = 0; i < 8; ++i) {
       if (validBoard[i]) {
-          boardId[i] = validIds[index++];
+          boardId[i] = validIds[index];
+          removalTimers[i] = validTimers[index];
+          validBoard[i] = true;
+          index++;
       }
   }
 }
@@ -253,6 +271,29 @@ void setModulo(Mel_obj *self, int newMod){
 
 void setNewSiz(Mel_obj *self, int newSiz){
   self->validSiz = newSiz;
+}
+
+void removeBoard(App *self, int arg) {
+  int pos = arg;
+
+  if(VERBOSE){
+    print("into remove board nodeId: %d\n", self->boardId[pos]);
+    print("pos: %d\n", pos);
+    print("validSiz: %d\n", self->validSiz);
+  }
+
+  if (pos >= 0 && pos < self->validSiz && self->validBoard[pos]) {
+      print("Board %d timed out and was removed.\n", self->boardId[pos]);
+      self->validBoard[pos] = false;
+
+      // Optional: compact board list
+      self->validSiz--;
+      sortValidBoards(self->boardId, self->validBoard, self->removalTimers);
+      SYNC(&mel_obj, setNewSiz, self->validSiz);
+  }
+
+  // Clear the reference to the fired Msg
+  self->removalTimers[pos] = NULL;
 }
 
 // receives messages from CAN
@@ -282,7 +323,7 @@ void receiver(App *self, int unused) {
           self->validBoard[self->validSiz] = true;
           self->boardId[self->validSiz] = (15-msg.nodeId);
           self->validSiz++;
-          sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
+          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
@@ -290,6 +331,16 @@ void receiver(App *self, int unused) {
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
+          }
+        }else {
+          int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
+          if (pos >= 0 && pos < 8) {
+            // Cancel previous pending removal if any
+            if (self->removalTimers[pos] != NULL) {
+                ABORT(self->removalTimers[pos]);
+            }    
+            // Schedule new removal and save the Msg
+            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
           }
         }
         break;
@@ -371,13 +422,23 @@ void receiver(App *self, int unused) {
           self->validBoard[self->validSiz] = true;
           self->boardId[self->validSiz] = (15-msg.nodeId);
           self->validSiz++;
-          sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
+          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
           print("New Board added with nodeId: %d\n", (15-msg.nodeId));
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
+          }
+        }else {
+          int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
+          if (pos >= 0 && pos < 8) {
+            // Cancel previous pending removal if any
+            if (self->removalTimers[pos] != NULL) {
+                ABORT(self->removalTimers[pos]);
+            }    
+            // Schedule new removal and save the Msg
+            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
           }
         }
         break;
@@ -394,6 +455,10 @@ void receiver(App *self, int unused) {
         break;
     }
   }
+}
+
+void out_failure(App *self, int id){
+  self->failureMode = 0;
 }
 
 void can_write(App *self, int id){
@@ -551,14 +616,42 @@ void reader(App *self, int c) {
 				break;
 		}
 	}else{ // musician mode
+    int random = 2;
+    // int random = (rand()%20)+10;
 		switch (c) {
 		  case 'h':
         print("h: shows this message\n",0);
         print("C: claims conductor mode\n",0);
         print("c: debug can mode\n",0);
         print("T: mutes/unmutes song\n",0);
+        print("<int>F: enters the specified error mode\n", 0);
+        print("G: comes out of the error mode\n", 0);
         print("I: enables/disables mute state printing\n",0);
         print("<int>V: sets the volume to <int>\n",0);
+        break;
+      case 'F':
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if(bufferValue == 1){
+          self->failureType = bufferValue;
+          self->failureMode = 1;
+          print("F1 failure mode activated\n", 0);
+        }else if (bufferValue == 2){
+          self->failureType = bufferValue;
+          self->failureMode = 1;
+          self->failureTimer = AFTER(SEC(random), &self, out_failure, 0);
+          print("F2 failure mode activated\n", 0);
+        }else{ // error not recognized
+          print("F%d failure mode not recognized\n", bufferValue);
+        }
+        break;
+      case 'G':
+        self->failureMode = 0;
+        if(self->failureType == 2){
+          ABORT(self->failureTimer);
+        }
+        print("Comming out of failure mode\n", 0);
         break;
 		  case 'C':
         self->conductor_mode = 1;        
@@ -600,13 +693,16 @@ void reader(App *self, int c) {
 
 void send_ping(App *self, int dummy){
 	CANMsg can_msg;
-  can_msg.msgId = 'A';
-  can_msg.nodeId = 15 - c_nodeId;
-  can_msg.length = 0;
-  CAN_SEND(&can0, &can_msg);
+  if(self->failureMode == 0){
+    // print("sending Ping\n", 0);
+    can_msg.msgId = 'A';
+    can_msg.nodeId = 15 - c_nodeId;
+    can_msg.length = 0;
+    CAN_SEND(&can0, &can_msg);
 
-  // send ping every 100 ms all time
-  AFTER(MSEC(100), &self, send_ping, 0);
+    // send ping every 100 ms all time
+    AFTER(MSEC(100), &self, send_ping, 0);
+  }
 }
 
 void startApp(App *self, int arg) {
