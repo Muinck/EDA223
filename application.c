@@ -278,15 +278,15 @@ void receiver(App *self, int unused) {
     // <int>K: changes the playing key to <int>\n"
     switch (id_sw) {
       case 'A':
-        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
+        if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
           self->validBoard[self->validSiz] = true;
-          self->boardId[self->validSiz] = msg.nodeId;
+          self->boardId[self->validSiz] = (15-msg.nodeId);
           self->validSiz++;
           sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
-          print("New Board added with nodeId: %d\n", msg.nodeId);
+          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
@@ -294,8 +294,8 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'C':
-        print("%d nodeId claimed conductor\n", msg.nodeId);
-        self->currentConductor = msg.nodeId;
+        print("%d nodeId claimed conductor\n", (15-msg.nodeId));
+        self->currentConductor = (15-msg.nodeId);
         self->conductor_mode = 0;
         break;
       case 'h':
@@ -308,7 +308,7 @@ void receiver(App *self, int unused) {
         print("<int>K: changes the playing key to <int>\n", 0);
         break;
       case 'B': // set bpms
-        if(msg.nodeId == self->currentConductor){
+        if((15-msg.nodeId) == self->currentConductor){
           msg.buff[msg.length] = '\0';
           bufferValue = atoi((char*)msg.buff);
           if(bufferValue < 30){
@@ -326,7 +326,7 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'P': //start the song
-        if(msg.nodeId == self->currentConductor){
+        if((15-msg.nodeId) == self->currentConductor){
           print("Starting to play the song\n", 0);
           SYNC(&mel_obj, Mel_kill, 0);
           ASYNC(&mel_obj, play_song_funct, 0);
@@ -335,7 +335,7 @@ void receiver(App *self, int unused) {
           print("Musician trying to start the song, ignored\n", 0);
         }
       case 'X':
-        if(msg.nodeId == self->currentConductor){
+        if((15-msg.nodeId) == self->currentConductor){
           SYNC(&mel_obj, Mel_kill, 1);
           print("Stop the song\n", 0); 
         }else{
@@ -343,7 +343,7 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'K':
-        if(msg.nodeId == self->currentConductor){
+        if((15-msg.nodeId) == self->currentConductor){
           msg.buff[msg.length] = '\0';
           bufferValue = atoi((char*)msg.buff);
           if (bufferValue < -5){
@@ -367,14 +367,14 @@ void receiver(App *self, int unused) {
   }else{
     switch (id_sw) {
       case 'A':
-        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
+        if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
           self->validBoard[self->validSiz] = true;
-          self->boardId[self->validSiz] = msg.nodeId;
+          self->boardId[self->validSiz] = (15-msg.nodeId);
           self->validSiz++;
           sortValidBoards(self->boardId, self->validBoard); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
-          print("New Board added with nodeId: %d\n", msg.nodeId);
+          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
@@ -385,7 +385,7 @@ void receiver(App *self, int unused) {
         //if in conductor change back to mussician and give them control
         if(self->conductor_mode != 0){
           self->conductor_mode = 0;
-          self->currentConductor = msg.nodeId;
+          self->currentConductor = (15-msg.nodeId);
           print("Giving conductor control, now in MUSICIAN mode\n", 0);
         }
         break;
@@ -399,7 +399,7 @@ void receiver(App *self, int unused) {
 void can_write(App *self, int id){
 	CANMsg can_msg;
   can_msg.msgId = id & 0x7F;
-  can_msg.nodeId = c_nodeId;
+  can_msg.nodeId = 15 - c_nodeId;
   can_msg.length = self->str_index;
   for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
@@ -452,6 +452,7 @@ void reader(App *self, int c) {
 				print("<int>V: sets the volume to <int>\n",0);
 				print("<int>B: sets the bpms of the song\n",0);
         print("c: debug can mode\n",0);
+				print("R: resets the configuration (bpm and key)\n",0);
 				print("P: starts playing the song\n",0);
         print("T: mutes/unmutes song\n",0);
 				print("X: stops playing the song\n",0);
@@ -476,7 +477,7 @@ void reader(App *self, int c) {
         SYNC(&mel_obj, mel_set_key, 0);
         print("Bpms and set tempo resetted, 120 and 0 values respectivly\n", 0);
         can_msg.msgId = 'B';
-        can_msg.nodeId = c_nodeId;
+        can_msg.nodeId = 15 - c_nodeId;
         can_msg.length = 3;
         can_msg.buff[0] = '1';
         can_msg.buff[1] = '2';
@@ -484,7 +485,7 @@ void reader(App *self, int c) {
         can_msg.buff[3] = '\0';
         CAN_SEND(&can0, &can_msg);
         can_msg.msgId = 'K';
-        can_msg.nodeId = c_nodeId;
+        can_msg.nodeId = 15 - c_nodeId;
         can_msg.length = 1;
         can_msg.buff[0] = '0';
         can_msg.buff[1] = '\0';
@@ -562,7 +563,7 @@ void reader(App *self, int c) {
 		  case 'C':
         self->conductor_mode = 1;        
         can_msg.msgId = 'C';
-        can_msg.nodeId = c_nodeId;
+        can_msg.nodeId = 15 - c_nodeId;
         can_msg.length = 0;
         CAN_SEND(&can0, &can_msg);
         print("Conductor mode claimed\n", 0);
@@ -600,7 +601,7 @@ void reader(App *self, int c) {
 void send_ping(App *self, int dummy){
 	CANMsg can_msg;
   can_msg.msgId = 'A';
-  can_msg.nodeId = c_nodeId;
+  can_msg.nodeId = 15 - c_nodeId;
   can_msg.length = 0;
   CAN_SEND(&can0, &can_msg);
 
