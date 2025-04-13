@@ -11,7 +11,7 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-const bool VERBOSE = false;
+bool VERBOSE = false;
 const int  c_nodeId = 15;
 
 const int DAC_WR_ADDR = DAC_Trigger_T5_TRGO + DAC_BASE;
@@ -91,10 +91,6 @@ void rst_cooldown(App *self, int dummy){
 void receiver(App *self, int unused) {
 	CANMsg msg;
 	CAN_RECEIVE(&can0, &msg);
-
-  if(VERBOSE){
-    print("Got msg with msgId %d\n", msg.msgId);
-  }
   
   if(self->cooldown == 1){
     if(!can_buffer_push(self->can_buff, &self->can_head, &self->can_tail, &self->can_size, msg.msgId)){
@@ -118,6 +114,9 @@ void can_write(App *self, int id){
 
 void send_msg(App *self, int dummy){
   can_write(self, self->msg_cnt);
+  if(VERBOSE){
+    print("Sending CAN message with id %d\n", self->msg_cnt);
+  }
   self->msg_cnt = (self->msg_cnt+1)%128;
 }
 
@@ -130,12 +129,6 @@ void send_burst(App *self, int dummy){
 
 // Keyboard 
 void reader(App *self, int c) {
-
-  if(VERBOSE){
-    if (c == '\n')
-      return;
-    print("Rcv: '%c'\n", c);
-	}
 	
   switch (c) {
     case 'h':
@@ -143,6 +136,7 @@ void reader(App *self, int c) {
       print("O: sends a single can message\n",0);
       print("B: burst, sends a can message every 500 ms\n",0);
       print("X: cancels the burst\n",0);
+      print("V: verbose mode prints when sending CAN messages\n",0);
       break;
     case 'O': //send single message
       send_msg(self, 0);
@@ -151,6 +145,15 @@ void reader(App *self, int c) {
       print("Starting to send burst\n", 0);
       self->abort_burst = 0;
       ASYNC(self, send_burst, 0);
+      break;
+    case 'V': //send burst
+      VERBOSE = !VERBOSE;
+      if(VERBOSE){
+        print("Now in verbose mode\n", 0);
+      }else{
+        print("Now in quiet mode\n", 0);
+
+      }
       break;
     case 'X': //cancell burst
       print("Cancelling burst\n", 0);
