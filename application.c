@@ -640,7 +640,7 @@ void reader(App *self, int c) {
         }else if (bufferValue == 2){
           self->failureType = bufferValue;
           self->failureMode = 1;
-          self->failureTimer = AFTER(SEC(random), &self, out_failure, 0);
+          self->failureTimer = AFTER(SEC(random), self, out_failure, 0);
           print("F2 failure mode activated\n", 0);
         }else{ // error not recognized
           print("F%d failure mode not recognized\n", bufferValue);
@@ -701,7 +701,7 @@ void send_ping(App *self, int dummy){
     CAN_SEND(&can0, &can_msg);
 
     // send ping every 100 ms all time
-    AFTER(MSEC(100), &self, send_ping, 0);
+    AFTER(MSEC(100), self, send_ping, 0);
   }
 }
 
@@ -713,7 +713,7 @@ void startApp(App *self, int arg) {
   SYNC(&obj_dac, DAC_gap, 1);
   ASYNC(&obj_dac, DAC_wr, 1);
   SYNC(&mel_obj, Mel_kill, 0);
-  AFTER(USEC(100), &app, send_ping, 0);
+  AFTER(USEC(100), self, send_ping, 0);
 }
 
 int main() {
