@@ -78,6 +78,7 @@ typedef struct {
   int failureType;
   int failureMode;
   Msg failureTimer;
+  int nodeId;
 } App;
 
 typedef struct {
@@ -105,7 +106,7 @@ typedef struct {
   int boardId[8];
 } Mel_obj;
 
-#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, 0, 1, 0, 0, NULL}
+#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, 0, 1, 0, 0, NULL, c_nodeId}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
 #define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 0, 1, 0, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}}
@@ -216,21 +217,23 @@ void setNewSiz(Mel_obj *self, int newSiz){
   self->validSiz = newSiz;
 }
 
+void setModulo(Mel_obj *self, int newMod){
+  self->myModulo = newMod;
+}
+
 void removeBoard(App *self, int arg) {
   int pos = arg;
   
   //Inform we lost the board
   CANMsg can_msg;
   can_msg.msgId = 'L';
-  can_msg.nodeId = 15 - c_nodeId;
+  can_msg.nodeId = 15 - self->nodeId;
   can_msg.length = 1;
   can_msg.buff[0] = (uchar) self->boardId[pos];
   CAN_SEND(&can0, &can_msg);
 
   if(VERBOSE){
-    print("into remove board nodeId: %d\n", self->boardId[pos]);
-    print("pos: %d\n", pos);
-    print("validSiz: %d\n", self->validSiz);
+    print("info remove board nodeId: %d\n", self->boardId[pos]);
   }
 
   if (pos >= 0 && pos < self->validSiz && self->validBoard[pos]) {
@@ -241,6 +244,11 @@ void removeBoard(App *self, int arg) {
       self->validSiz--;
       sortValidBoards(self->boardId, self->validBoard, self->removalTimers);
       SYNC(&mel_obj, setNewSiz, self->validSiz);
+      SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
+  }
+
+  if(VERBOSE){
+    print("New validSiz: %d\n", self->validSiz);
   }
 
   // Clear the reference to the fired Msg
@@ -287,7 +295,6 @@ void send_sync(Mel_obj *self, int nodeId) {
   mel_add_sync_board(self->validBoard, self->boardId, nodeId);
 }
 
-
 void DAC_gap(DAC_obj *self, int gap){
   self->gap = gap;
 }
@@ -316,10 +323,6 @@ void* get_failure(App *self, int dummy){
   return (void*)(intptr_t)(self->failureMode);
 }
 
-void setModulo(Mel_obj *self, int newMod){
-  self->myModulo = newMod;
-}
-
 void syncModulo(Mel_obj *self, int newMod){
   self->mel_mod = newMod;
 }
@@ -339,8 +342,13 @@ void app_add_board(App *self, int nodeId){
   self->validSiz++;
   sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
   //set modulo that this board will play
-  SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+  SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
   print("New Board added with nodeId: %d\n", (15-nodeId));
+}
+
+void* get_nodeId(App *self, int dummy){
+  int ret = self->nodeId;
+  return (void*)(intptr_t)(ret);
 }
 
 void play_song_funct(Mel_obj *self, int in){
@@ -356,11 +364,12 @@ void play_song_funct(Mel_obj *self, int in){
   if(in == 0){
     //TODO sending it here is a problem, maybe better if we do it when starting the gap
     if (self->send_sync == 1) {
+      print("Sending all sync commands...\n", 0);
       for (int i = 0; i < 8; ++i) {
           if (self->validBoard[i]) {
               CANMsg can_msg;
               can_msg.msgId = 'S';
-              can_msg.nodeId = 15 - c_nodeId;  // sender's nodeId
+              can_msg.nodeId = 15 - SYNC(&app, get_nodeId, 0);  // sender's nodeId
               can_msg.length = 3;
               can_msg.buff[0] = (unsigned char)(self->boardId[i]);  // recipient nodeId
               can_msg.buff[1] = (unsigned char)(self->mel_idx);          // current note index
@@ -372,6 +381,10 @@ void play_song_funct(Mel_obj *self, int in){
               CAN_SEND(&can0, &can_msg);
   
               self->validBoard[i] = false;
+
+              if(VERBOSE){
+                print("Sending sync command to %d\n", self->boardId[i]);
+              }
           }
       }
       self->send_sync = 0;       // Reset sync flag
@@ -443,12 +456,12 @@ void receiver(App *self, int unused) {
 	CAN_RECEIVE(&can0, &msg);
   char id_sw = msg.msgId;
 
-  if(VERBOSE){ //print receiving stuff
-    SCI_WRITE(&sci0, "Can msg: ");
-    print("MSG_ID: %c MSG_DAT: ", msg.msgId);
-    SCI_WRITE(&sci0, msg.buff);
-    SCI_WRITE(&sci0, "\n");
-  }
+  // if(VERBOSE){ //print receiving stuff
+  //   SCI_WRITE(&sci0, "Can msg: ");
+  //   print("MSG_ID: %c MSG_DAT: ", msg.msgId);
+  //   SCI_WRITE(&sci0, msg.buff);
+  //   SCI_WRITE(&sci0, "\n");
+  // }
 
   // While in MUSICIAN mode:
   if(self->conductor_mode == 0){
@@ -465,33 +478,37 @@ void receiver(App *self, int unused) {
           self->validSiz++;
           sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
-          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+          SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
           print("New Board added with nodeId: %d\n", (15-msg.nodeId));
           if(VERBOSE){
-            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+            print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
           }
         }
         break;
       case 'L':
-        if((int)msg.buff[0] == c_nodeId){
+        if((int)msg.buff[0] == self->nodeId){
           SYNC(&mel_obj, Mel_kill, 1); //stop playing
           //empty all the valid list except for us
-          for (int i = 0; i < 8; i++) {
-            if (self->validBoard[i] && self->boardId[i] != c_nodeId) {
-                //remove from list
-                self->validBoard[i] = false;
-                self->validSiz--;
+          self->validSiz = 1;
+          self->validBoard[0] = true;
+          for (int i = 1; i < 8; i++) {
+              self->validBoard[i] = false;
+          }
+          self->boardId[0] = self->nodeId;
+          for(int i = 0; i < 8; i++){
+            if(self->removalTimers[i] != NULL){
+              ABORT(self->removalTimers[i]);
+              self->removalTimers[i] = NULL;
             }
           }
-          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
-          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+          SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
           print("All boards removed from active list\n", 0);
           if(VERBOSE){
-            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+            print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
           }
         }else{
@@ -501,18 +518,24 @@ void receiver(App *self, int unused) {
             self->validSiz--;
             sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
             //set modulo that this board will play
-            SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+            SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
             SYNC(&mel_obj, setNewSiz, self->validSiz);
             print("Board removed with nodeId: %d\n", ((int)msg.buff[0]));
             if(VERBOSE){
-              print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+              print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
               print("Total number of boards: %d\n",self->validSiz);
             }
           }
         }
         break;
       case 'S':
-        if((int)msg.buff[0] == c_nodeId){ //if is going to me, update the stuff
+        if(VERBOSE){
+          print("Got S msg from NodeId %d\n", 15 - msg.nodeId);
+          print("DAT: destination nodeId %d", (int)msg.buff[0]);
+          print(" new mel_idx %d", (int)msg.buff[1]);
+          print(" new mel_mod %d\n", (int)msg.buff[2]);
+        }
+        if((int)msg.buff[0] == self->nodeId){ //if is going to me, update the stuff
           int new_mel_idx = (int)msg.buff[1];
           int new_mel_mod = (int)msg.buff[2];
           // set module and melody index
@@ -604,29 +627,33 @@ void receiver(App *self, int unused) {
         if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
           CANMsg can_msg;
           can_msg.msgId = 'K';
-          can_msg.nodeId = 15 - c_nodeId;
+          can_msg.nodeId = 15 - self->nodeId;
           can_msg.length = int_to_str(SYNC(&mel_obj, get_key, 0), can_msg.buff);
           CAN_SEND(&can0, &can_msg);
           can_msg.msgId = 'B';
-          can_msg.nodeId = 15 - c_nodeId;
+          can_msg.nodeId = 15 - self->nodeId;
           can_msg.length = int_to_str(SYNC(&mel_obj, get_tempo, 0), can_msg.buff);
           CAN_SEND(&can0, &can_msg);
 
           if(music_playing){
             // add it later with the sync comman
             SYNC(&mel_obj, send_sync, (15-msg.nodeId));
-          }else{
-            self->validBoard[self->validSiz] = true;
-            self->boardId[self->validSiz] = (15-msg.nodeId);
-            self->validSiz++;
-            sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
-            //set modulo that this board will play
-            SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
-            print("New Board added with nodeId: %d\n", (15-msg.nodeId));
             if(VERBOSE){
-              print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
-              print("Total number of boards: %d\n",self->validSiz);
+              print("Commanding sync command\n", 0);
             }
+          }
+          
+          self->validBoard[self->validSiz] = true;
+          self->boardId[self->validSiz] = (15-msg.nodeId);
+          self->validSiz++;
+          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+          //set modulo that this board will play
+          SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
+          SYNC(&mel_obj, setNewSiz, self->validSiz);
+          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
+          if(VERBOSE){
+            print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
+            print("Total number of boards: %d\n",self->validSiz);
           }
         }else {
           int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
@@ -655,14 +682,38 @@ void receiver(App *self, int unused) {
   }
 }
 
+void send_ping(App *self, int dummy){
+	CANMsg can_msg;
+  if(self->failureMode == 0){
+    can_msg.msgId = 'A';
+    can_msg.nodeId = 15 - self->nodeId;
+    can_msg.length = 0;
+    int can_ret = CAN_SEND(&can0, &can_msg);
+    if(can_ret != 0 && self->conductor_mode == 0 && SYNC(&mel_obj, get_playing, 0)){
+      print("Im an alone musician, so i stop playing :(\n", 0);
+      SYNC(&mel_obj, Mel_kill, 1);
+    }
+
+    if(dummy%10 == 0 && VERBOSE){
+      print("Sending ping\n", 0);
+    }
+
+    // send ping every 100 ms all time
+    AFTER(MSEC(100), self, send_ping, ++dummy);
+  }
+}
+
 void out_failure(App *self, int id){
   self->failureMode = 0;
+
+  AFTER(USEC(1), self, send_ping, 0);
+  print("Comming out of failure mode\n", 0);
 }
 
 void can_write(App *self, int id){
 	CANMsg can_msg;
   can_msg.msgId = id & 0x7F;
-  can_msg.nodeId = 15 - c_nodeId;
+  can_msg.nodeId = 15 - self->nodeId;
   can_msg.length = self->str_index;
   for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
@@ -740,7 +791,7 @@ void reader(App *self, int c) {
         SYNC(&mel_obj, mel_set_key, 0);
         print("Bpms and set tempo resetted, 120 and 0 values respectivly\n", 0);
         can_msg.msgId = 'B';
-        can_msg.nodeId = 15 - c_nodeId;
+        can_msg.nodeId = 15 - self->nodeId;
         can_msg.length = 3;
         can_msg.buff[0] = '1';
         can_msg.buff[1] = '2';
@@ -748,12 +799,12 @@ void reader(App *self, int c) {
         can_msg.buff[3] = '\0';
         CAN_SEND(&can0, &can_msg);
         can_msg.msgId = 'K';
-        can_msg.nodeId = 15 - c_nodeId;
+        can_msg.nodeId = 15 - self->nodeId;
         can_msg.length = 1;
         can_msg.buff[0] = '0';
         can_msg.buff[1] = '\0';
         CAN_SEND(&can0, &can_msg);
-        break;
+        break; 
 			case 'B': // set bpms
 				self->str_buff[self->str_index] = '\0';
 				can_write(&app, c);
@@ -814,32 +865,67 @@ void reader(App *self, int c) {
 				break;
 		}
 	}else{ // musician mode
-    int random = 2;
-    // int random = (rand()%20)+10;
+    int random = (rand()%20)+10;
 		switch (c) {
 		  case 'h':
         print("h: shows this message\n",0);
         print("C: claims conductor mode\n",0);
         print("c: debug can mode\n",0);
         print("T: mutes/unmutes song\n",0);
+				print("<int>N: change board nodeId\n",0);
         print("<int>F: enters the specified error mode\n", 0);
         print("G: comes out of the error mode\n", 0);
         print("I: enables/disables mute state printing\n",0);
         print("<int>V: sets the volume to <int>\n",0);
+        break;       
+      case 'N': // set nodeId
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if(bufferValue < 0){
+          print("Node id should be positive\n", 0);
+          bufferValue = 2;
+        }else if (bufferValue > 15){
+          print("Maximun value is 15\n", 0);
+          bufferValue = 15;
+        }			
+        self->nodeId = bufferValue;
+
+        //update the boards
+        self->validSiz = 1;
+        self->validBoard[0] = true;
+        for (int i = 1; i < 8; i++) {
+            self->validBoard[i] = false;
+        }
+        self->boardId[0] = self->nodeId;
+        for(int i = 0; i < 8; i++){
+          if(self->removalTimers[i] != NULL){
+            ABORT(self->removalTimers[i]);
+            self->removalTimers[i] = NULL;
+          }
+        }
+        sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+        //set modulo that this board will play
+        SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
+        SYNC(&mel_obj, setNewSiz, self->validSiz);
+
+        print("NodeIde setted to %d\n", bufferValue);
         break;
       case 'F':
         self->str_buff[self->str_index] = '\0';
         self->str_index = 0;
         bufferValue = atoi(self->str_buff);
         if(bufferValue == 1){
+          SYNC(&mel_obj, Mel_kill, 1);
           self->failureType = bufferValue;
           self->failureMode = 1;
           print("F1 failure mode activated\n", 0);
         }else if (bufferValue == 2){
+          SYNC(&mel_obj, Mel_kill, 1);
           self->failureType = bufferValue;
           self->failureMode = 1;
           self->failureTimer = AFTER(SEC(random), self, out_failure, 0);
-          print("F2 failure mode activated\n", 0);
+          print("F2 failure mode activated, comming in %d sec\n", random);
         }else{ // error not recognized
           print("F%d failure mode not recognized\n", bufferValue);
         }
@@ -849,12 +935,13 @@ void reader(App *self, int c) {
         if(self->failureType == 2){
           ABORT(self->failureTimer);
         }
+        AFTER(USEC(1), self, send_ping, 0);
         print("Comming out of failure mode\n", 0);
         break;
 		  case 'C':
         self->conductor_mode = 1;        
         can_msg.msgId = 'C';
-        can_msg.nodeId = 15 - c_nodeId;
+        can_msg.nodeId = 15 - self->nodeId;
         can_msg.length = 0;
         CAN_SEND(&can0, &can_msg);
         print("Conductor mode claimed\n", 0);
@@ -887,20 +974,6 @@ void reader(App *self, int c) {
         break;
 		}
 	}
-}
-
-void send_ping(App *self, int dummy){
-	CANMsg can_msg;
-  if(self->failureMode == 0){
-    // print("sending Ping\n", 0);
-    can_msg.msgId = 'A';
-    can_msg.nodeId = 15 - c_nodeId;
-    can_msg.length = 0;
-    CAN_SEND(&can0, &can_msg);
-
-    // send ping every 100 ms all time
-    AFTER(MSEC(100), self, send_ping, 0);
-  }
 }
 
 void startApp(App *self, int arg) {
