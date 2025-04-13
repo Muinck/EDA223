@@ -43,6 +43,23 @@ unsigned int freq_idx_2_arr(unsigned int in) {
   return in + 10;
 }
 
+bool inTheList(int id, const int boardId[8], const bool validBoard[8]) {
+  for (int i = 0; i < 8; ++i) {
+      if (boardId[i] == id && validBoard[i]) {
+          return true; 
+      }
+  }
+  return false; // not found
+}
+int listPos(int id, const int boardId[8], const bool validBoard[8]) {
+  for (int i = 0; i < 8; ++i) {
+      if (boardId[i] == id && validBoard[i]) {
+          return i; 
+      }
+  }
+  return -1; // not found
+}
+
 typedef struct {
   Object super;
   char str_buff[128];
@@ -80,14 +97,18 @@ typedef struct {
   int key;
   int kill;
   int mel_idx;
+  int mel_mod;
   int myModulo; //so the app knows in which modulo to play
   int validSiz;
+  int send_sync;
+  bool validBoard[8];
+  int boardId[8];
 } Mel_obj;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, 0, 1, 0, 0, NULL}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
-#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 1}
+#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 0, 1, 0, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -151,80 +172,6 @@ void DAC_mute(DAC_obj *self, int dummy){
   }
 }
 
-void DAC_gap(DAC_obj *self, int gap){
-  self->gap = gap;
-}
-
-void Mel_kill(Mel_obj *self, int kill){
-  self->kill = kill;
-}
-
-void DAC_set_period(DAC_obj *self, int period){
-  self->period = period;
-}
-
-void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
-  int next = play;
-  if(play == 0 || self->muted == 1 || self->gap == 1){
-    *DAC_wr_pointer = 0;
-	  next = 1;
-  }else{
-    *DAC_wr_pointer = self->volume;
-    next = 0;
-  }
-  SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
-}
-
-void* get_failure(App *self, int dummy){
-  return (void*)(intptr_t)(self->failureMode);
-}
-
-void play_song_funct(Mel_obj *self, int in){
-  // 0 -> note, 1 -> gap
-
-  if(self->kill == 1){
-    // mute
-    SYNC(&obj_dac, DAC_gap, 1);
-    self->mel_idx = 0;
-    return;
-  }
-  if(in == 0){
-    int failure = (int)(intptr_t)SYNC(&app, get_failure, 0);
-    // set new tone
-    SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx%32] + self->key)]);
-    // unmute
-    if((self->mel_idx % self->validSiz) == self->myModulo && failure == 0){
-      SYNC(&obj_dac, DAC_gap, 0);
-    }
-		// after call for tempo - gap    
-    AFTER(USEC(((self->tempo*note_dur[self->mel_idx%32])-(self->gap_siz*1000))), self, play_song_funct, 1);
-  }else{
-    // mute
-    SYNC(&obj_dac, DAC_gap, 1);
-    // update index
-    self->mel_idx++;
-    //after call for gap
-    AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
-  }
-}
-
-bool inTheList(int id, const int boardId[8], const bool validBoard[8]) {
-  for (int i = 0; i < 8; ++i) {
-      if (boardId[i] == id && validBoard[i]) {
-          return true; 
-      }
-  }
-  return false; // not found
-}
-int listPos(int id, const int boardId[8], const bool validBoard[8]) {
-  for (int i = 0; i < 8; ++i) {
-      if (boardId[i] == id && validBoard[i]) {
-          return i; 
-      }
-  }
-  return -1; // not found
-}
-
 void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
   int validIds[8];
   Msg validTimers[8];
@@ -265,16 +212,20 @@ void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
   }
 }
 
-void setModulo(Mel_obj *self, int newMod){
-  self->myModulo = newMod;
-}
-
 void setNewSiz(Mel_obj *self, int newSiz){
   self->validSiz = newSiz;
 }
 
 void removeBoard(App *self, int arg) {
   int pos = arg;
+  
+  //Inform we lost the board
+  CANMsg can_msg;
+  can_msg.msgId = 'L';
+  can_msg.nodeId = 15 - c_nodeId;
+  can_msg.length = 1;
+  can_msg.buff[0] = (uchar) self->boardId[pos];
+  CAN_SEND(&can0, &can_msg);
 
   if(VERBOSE){
     print("into remove board nodeId: %d\n", self->boardId[pos]);
@@ -294,6 +245,195 @@ void removeBoard(App *self, int arg) {
 
   // Clear the reference to the fired Msg
   self->removalTimers[pos] = NULL;
+}
+
+void* get_playing(Mel_obj *self, int unused) {
+  int ret = 0;
+  if(self->kill == 0){
+    ret = 1;
+  }
+  return (void*)(intptr_t)(ret);
+}
+
+void* get_tempo(Mel_obj *self, int unused) {
+  int ret = 60000000 / self->tempo;
+  return (void*)(intptr_t)(ret);
+}
+
+void* get_key(Mel_obj *self, int unused) {
+  int ret = self->key;
+  return (void*)(intptr_t)(ret);
+}
+
+void mel_add_sync_board(bool validBoard[8], int boardId[8], int nodeId) {
+  for (int i = 0; i < 8; i++) {
+      if (validBoard[i] && boardId[i] == nodeId) {
+          // Already in the list
+          return;
+      }
+  }
+  // Add to first free slot
+  for (int i = 0; i < 8; i++) {
+      if (!validBoard[i]) {
+          boardId[i] = nodeId;
+          validBoard[i] = true;
+          return;
+      }
+  }
+}
+
+void send_sync(Mel_obj *self, int nodeId) {
+  self->send_sync = 1;
+  mel_add_sync_board(self->validBoard, self->boardId, nodeId);
+}
+
+
+void DAC_gap(DAC_obj *self, int gap){
+  self->gap = gap;
+}
+
+void Mel_kill(Mel_obj *self, int kill){
+  self->kill = kill;
+}
+
+void DAC_set_period(DAC_obj *self, int period){
+  self->period = period;
+}
+
+void DAC_wr(DAC_obj *self, int play){ // 0 -> silent, 1 -> sound (setted volume)
+  int next = play;
+  if(play == 0 || self->muted == 1 || self->gap == 1){
+    *DAC_wr_pointer = 0;
+	  next = 1;
+  }else{
+    *DAC_wr_pointer = self->volume;
+    next = 0;
+  }
+  SEND(USEC(self->period), USEC(100), self, DAC_wr, next);
+}
+
+void* get_failure(App *self, int dummy){
+  return (void*)(intptr_t)(self->failureMode);
+}
+
+void setModulo(Mel_obj *self, int newMod){
+  self->myModulo = newMod;
+}
+
+void syncModulo(Mel_obj *self, int newMod){
+  self->mel_mod = newMod;
+}
+void syncMel_idx(Mel_obj *self, int newIdx){
+  self->mel_idx = newIdx;
+}
+
+void app_add_board(App *self, int nodeId){
+  for (int i = 0; i < 8; i++) {
+    if (self->validBoard[i] && self->boardId[i] == nodeId) {
+        // Already in the list
+        return;
+    }
+  }
+  self->validBoard[self->validSiz] = true;
+  self->boardId[self->validSiz] = (15-nodeId);
+  self->validSiz++;
+  sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+  //set modulo that this board will play
+  SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+  print("New Board added with nodeId: %d\n", (15-nodeId));
+}
+
+void play_song_funct(Mel_obj *self, int in){
+  // 0 -> note, 1 -> gap
+
+  if(self->kill == 1){
+    // mute
+    SYNC(&obj_dac, DAC_gap, 1);
+    self->mel_idx = 0;
+    self->mel_mod = 0;
+    return;
+  }
+  if(in == 0){
+    //TODO sending it here is a problem, maybe better if we do it when starting the gap
+    if (self->send_sync == 1) {
+      for (int i = 0; i < 8; ++i) {
+          if (self->validBoard[i]) {
+              CANMsg can_msg;
+              can_msg.msgId = 'S';
+              can_msg.nodeId = 15 - c_nodeId;  // sender's nodeId
+              can_msg.length = 3;
+              can_msg.buff[0] = (unsigned char)(self->boardId[i]);  // recipient nodeId
+              can_msg.buff[1] = (unsigned char)(self->mel_idx);          // current note index
+              can_msg.buff[2] = (unsigned char)(self->mel_mod);          // modulo position
+  
+              // add to our valid list
+              SYNC(&app, app_add_board, self->boardId[i]);
+
+              CAN_SEND(&can0, &can_msg);
+  
+              self->validBoard[i] = false;
+          }
+      }
+      self->send_sync = 0;       // Reset sync flag
+    }
+  
+    int failure = (int)(intptr_t)SYNC(&app, get_failure, 0);
+    // set new tone
+    SYNC(&obj_dac, DAC_set_period, per_array[freq_idx_2_arr(melody_notes[self->mel_idx] + self->key)]);
+    // unmute
+    if(self->mel_mod == self->myModulo && failure == 0){
+      SYNC(&obj_dac, DAC_gap, 0);
+    }
+		// after call for tempo - gap    
+    AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
+  }else{
+    // mute
+    SYNC(&obj_dac, DAC_gap, 1);
+    // update index
+    self->mel_idx = (self->mel_idx+1) % 32;
+    self->mel_mod = (self->mel_mod+1) % self->validSiz;
+    //after call for gap
+    AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
+  }
+}
+
+int int_to_str(int value, unsigned char buff[8]) {
+  int i = 0;
+  int isNegative = 0;
+
+  if (value < 0) {
+      isNegative = 1;
+      value = -value;
+  }
+
+  if (value == 0) {
+      buff[i++] = '0';
+  } else {
+      unsigned char temp[8];
+      int j = 0;
+
+      while (value > 0 && j < 7) {  // max 7 digits to leave room for null
+          temp[j++] = '0' + (value % 10);
+          value /= 10;
+      }
+
+      if (isNegative && i < 7) {
+          buff[i++] = '-';
+      }
+
+      while (j > 0 && i < 8) {
+          buff[i++] = temp[--j];
+      }
+  }
+
+  // Null-terminate only if there's space (optional)
+  if (i < 8) {
+      buff[i] = '\0';
+  } else {
+      buff[7] = '\0'; // make sure it's terminated
+  }
+
+  return i; // number of characters before null terminator
 }
 
 // receives messages from CAN
@@ -332,16 +472,56 @@ void receiver(App *self, int unused) {
             print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
           }
-        }else {
-          int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
-          if (pos >= 0 && pos < 8) {
-            // Cancel previous pending removal if any
-            if (self->removalTimers[pos] != NULL) {
-                ABORT(self->removalTimers[pos]);
-            }    
-            // Schedule new removal and save the Msg
-            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
+        }
+        break;
+      case 'L':
+        if((int)msg.buff[0] == c_nodeId){
+          SYNC(&mel_obj, Mel_kill, 1); //stop playing
+          //empty all the valid list except for us
+          for (int i = 0; i < 8; i++) {
+            if (self->validBoard[i] && self->boardId[i] != c_nodeId) {
+                //remove from list
+                self->validBoard[i] = false;
+                self->validSiz--;
+            }
           }
+          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+          //set modulo that this board will play
+          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+          SYNC(&mel_obj, setNewSiz, self->validSiz);
+          print("All boards removed from active list\n", 0);
+          if(VERBOSE){
+            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+            print("Total number of boards: %d\n",self->validSiz);
+          }
+        }else{
+          if(inTheList(((int)msg.buff[0]), self->boardId, self->validBoard)){
+            int rm_pos = listPos((int)msg.buff[0], self->boardId, self->validBoard);
+            self->validBoard[rm_pos] = false;
+            self->validSiz--;
+            sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+            //set modulo that this board will play
+            SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+            SYNC(&mel_obj, setNewSiz, self->validSiz);
+            print("Board removed with nodeId: %d\n", ((int)msg.buff[0]));
+            if(VERBOSE){
+              print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+              print("Total number of boards: %d\n",self->validSiz);
+            }
+          }
+        }
+        break;
+      case 'S':
+        if((int)msg.buff[0] == c_nodeId){ //if is going to me, update the stuff
+          int new_mel_idx = (int)msg.buff[1];
+          int new_mel_mod = (int)msg.buff[2];
+          // set module and melody index
+          SYNC(&mel_obj, syncMel_idx, new_mel_idx);
+          SYNC(&mel_obj, syncModulo, new_mel_mod);
+
+          //and start playing
+          SYNC(&mel_obj, Mel_kill, 0);
+          ASYNC(&mel_obj, play_song_funct, 0);
         }
         break;
       case 'C':
@@ -354,6 +534,8 @@ void receiver(App *self, int unused) {
         print("When data needs to be provided, it shall be done in str format in the msg:\n\n", 0);
         print("h: shows this message\n", 0);
         print("<int>B: sets the bpms of the song\n", 0);
+        print("L: byte(0)=nodeId removes the board from the available list\n", 0);
+        print("S: sync message with nodeId, mel_idx and mel_mod info\n", 0);
         print("S: starts playing the song\n", 0);
         print("X: stops playing the song\n", 0);
         print("<int>K: changes the playing key to <int>\n", 0);
@@ -416,19 +598,35 @@ void receiver(App *self, int unused) {
         break;
     }
   }else{
+    int music_playing = SYNC(&mel_obj, get_playing, 0);
     switch (id_sw) {
       case 'A':
         if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
-          self->validBoard[self->validSiz] = true;
-          self->boardId[self->validSiz] = (15-msg.nodeId);
-          self->validSiz++;
-          sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
-          //set modulo that this board will play
-          SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
-          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
-          if(VERBOSE){
-            print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
-            print("Total number of boards: %d\n",self->validSiz);
+          CANMsg can_msg;
+          can_msg.msgId = 'K';
+          can_msg.nodeId = 15 - c_nodeId;
+          can_msg.length = int_to_str(SYNC(&mel_obj, get_key, 0), can_msg.buff);
+          CAN_SEND(&can0, &can_msg);
+          can_msg.msgId = 'B';
+          can_msg.nodeId = 15 - c_nodeId;
+          can_msg.length = int_to_str(SYNC(&mel_obj, get_tempo, 0), can_msg.buff);
+          CAN_SEND(&can0, &can_msg);
+
+          if(music_playing){
+            // add it later with the sync comman
+            SYNC(&mel_obj, send_sync, (15-msg.nodeId));
+          }else{
+            self->validBoard[self->validSiz] = true;
+            self->boardId[self->validSiz] = (15-msg.nodeId);
+            self->validSiz++;
+            sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
+            //set modulo that this board will play
+            SYNC(&mel_obj, setModulo, listPos(c_nodeId, self->boardId, self->validBoard));
+            print("New Board added with nodeId: %d\n", (15-msg.nodeId));
+            if(VERBOSE){
+              print("Our modulo is now: %d\n", listPos(c_nodeId, self->boardId, self->validBoard));
+              print("Total number of boards: %d\n",self->validSiz);
+            }
           }
         }else {
           int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
@@ -712,7 +910,7 @@ void startApp(App *self, int arg) {
 
   SYNC(&obj_dac, DAC_gap, 1);
   ASYNC(&obj_dac, DAC_wr, 1);
-  SYNC(&mel_obj, Mel_kill, 0);
+  SYNC(&mel_obj, Mel_kill, 1);
   AFTER(USEC(100), self, send_ping, 0);
 }
 
