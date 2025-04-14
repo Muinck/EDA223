@@ -175,47 +175,51 @@ void DAC_mute(DAC_obj *self, int dummy){
 }
 
 void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
+  // Temporary arrays to hold valid board IDs
   int validIds[8];
-  Msg validTimers[8];
+  Msg valid_timers[8];
   int count = 0;
 
-  // Extract valid entries
-  for (int i = 0; i < 8; ++i) {
+  for(int i = 0; i < 8; i++){
+    if(self->removalTimers[i] != NULL && validBoard[i]){
+      ABORT(self->removalTimers[i]);
+      self->removalTimers[i] = NULL;
+    }
+  }
+
+  // Collect valid boardIds
+  for (int i = 0; i < 8; i++) {
       if (validBoard[i]) {
-          validIds[count] = boardId[i];
-          validTimers[count] = removalTimers[i];
-          count++;
+        valid_timers[count] = removalTimers[i];
+        validIds[count++] = boardId[i];
       }
   }
 
-  // Insertion sort
-  for (int i = 1; i < count; ++i) {
+  // Simple insertion sort on validIds
+  for (int i = 1; i < count; i++) {
       int key = validIds[i];
-      Msg timerKey = validTimers[i];
+      int msg = valid_timers[i];
       int j = i - 1;
-
       while (j >= 0 && validIds[j] > key) {
           validIds[j + 1] = validIds[j];
-          validTimers[j + 1] = validTimers[j];
+          valid_timers[j + 1] = valid_timers[j];
           j--;
       }
-
       validIds[j + 1] = key;
-      validTimers[j + 1] = timerKey;
+      valid_timers[j + 1] = msg;
   }
 
-  // Write sorted valid entries back
-  for (int i = 0; i < count; ++i) {
+  // Fill boardId and validBoard arrays with sorted valid ones first
+  for (int i = 0; i < count; i++) {
       boardId[i] = validIds[i];
-      removalTimers[i] = validTimers[i];
+      removalTimers[i] = valid_timers[i];
       validBoard[i] = true;
   }
 
-  // Clear out the rest
-  for (int i = count; i < 8; ++i) {
-      boardId[i] = 0;
-      removalTimers[i] = NULL;
+  // Mark the rest as invalid
+  for (int i = count; i < 8; i++) {
       validBoard[i] = false;
+      removalTimers[i] = NULL;
   }
 }
 
@@ -228,7 +232,10 @@ void setModulo(Mel_obj *self, int newMod){
 }
 
 void removeBoard(App *self, int arg) {
-  int pos = arg;
+  int pos = listPos(arg, self->boardId, self->validBoard);
+  if(pos == -1){
+    print("Board %d trying to be removed not in the list, ignoring\n", arg);
+  }
   
   //Inform we lost the board
   CANMsg can_msg;
@@ -244,6 +251,10 @@ void removeBoard(App *self, int arg) {
 
   if (pos >= 0 && pos < self->validSiz && self->validBoard[pos]) {
       print("Board %d timed out and was removed.\n", self->boardId[pos]);
+      if(self->validBoard[pos] != NULL){
+        ABORT(self->removalTimers[pos]);
+        self->removalTimers[pos] = NULL;
+      }
       self->validBoard[pos] = false;
 
       // Optional: compact board list
@@ -388,7 +399,11 @@ void play_song_funct(Mel_obj *self, int in){
               SYNC(&app, app_add_board, self->boardId[i]);
 
               CAN_SEND(&can0, &can_msg);
-  
+              
+              if(self->validBoard[i] != NULL){
+                ABORT(self->removalTimers[i]);
+                self->removalTimers[i] = NULL;
+              }
               self->validBoard[i] = false;
 
               if(VERBOSE){
@@ -506,7 +521,11 @@ void receiver(App *self, int unused) {
           self->validSiz = 1;
           self->validBoard[0] = true;
           for (int i = 1; i < 8; i++) {
-              self->validBoard[i] = false;
+            if(self->validBoard[i] != NULL){
+              ABORT(self->removalTimers[i]);
+              self->removalTimers[i] = NULL;
+            }
+            self->validBoard[i] = false;
           }
           self->boardId[0] = self->nodeId;
           for(int i = 0; i < 8; i++){
@@ -526,6 +545,10 @@ void receiver(App *self, int unused) {
         }else{
           if(inTheList(((int)msg.buff[0]), self->boardId, self->validBoard)){
             int rm_pos = listPos((int)msg.buff[0], self->boardId, self->validBoard);
+            if(self->validBoard[rm_pos] != NULL){
+              ABORT(self->removalTimers[rm_pos]);
+              self->removalTimers[rm_pos] = NULL;
+            }
             self->validBoard[rm_pos] = false;
             self->validSiz--;
             sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
@@ -686,7 +709,7 @@ void receiver(App *self, int unused) {
               ABORT(self->removalTimers[pos]);
             }
             // Schedule new removal and save the Msg
-            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
+            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, msg.nodeId);
           }
         }
         break;
@@ -941,7 +964,7 @@ void reader(App *self, int c) {
         self->validSiz = 1;
         self->validBoard[0] = true;
         for (int i = 1; i < 8; i++) {
-            self->validBoard[i] = false;
+          self->validBoard[i] = false;
         }
         self->boardId[0] = self->nodeId;
         for(int i = 0; i < 8; i++){
