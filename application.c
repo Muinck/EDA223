@@ -51,6 +51,7 @@ bool inTheList(int id, const int boardId[8], const bool validBoard[8]) {
   }
   return false; // not found
 }
+
 int listPos(int id, const int boardId[8], const bool validBoard[8]) {
   for (int i = 0; i < 8; ++i) {
       if (boardId[i] == id && validBoard[i]) {
@@ -178,6 +179,7 @@ void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
   Msg validTimers[8];
   int count = 0;
 
+  // Extract valid entries
   for (int i = 0; i < 8; ++i) {
       if (validBoard[i]) {
           validIds[count] = boardId[i];
@@ -202,14 +204,18 @@ void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
       validTimers[j + 1] = timerKey;
   }
 
-  int index = 0;
-  for (int i = 0; i < 8; ++i) {
-      if (validBoard[i]) {
-          boardId[i] = validIds[index];
-          removalTimers[i] = validTimers[index];
-          validBoard[i] = true;
-          index++;
-      }
+  // Write sorted valid entries back
+  for (int i = 0; i < count; ++i) {
+      boardId[i] = validIds[i];
+      removalTimers[i] = validTimers[i];
+      validBoard[i] = true;
+  }
+
+  // Clear out the rest
+  for (int i = count; i < 8; ++i) {
+      boardId[i] = 0;
+      removalTimers[i] = NULL;
+      validBoard[i] = false;
   }
 }
 
@@ -227,7 +233,7 @@ void removeBoard(App *self, int arg) {
   //Inform we lost the board
   CANMsg can_msg;
   can_msg.msgId = 'L';
-  can_msg.nodeId = 15 - self->nodeId;
+  can_msg.nodeId = self->nodeId;
   can_msg.length = 1;
   can_msg.buff[0] = (uchar) self->boardId[pos];
   CAN_SEND(&can0, &can_msg);
@@ -245,10 +251,10 @@ void removeBoard(App *self, int arg) {
       sortValidBoards(self->boardId, self->validBoard, self->removalTimers);
       SYNC(&mel_obj, setNewSiz, self->validSiz);
       SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
-  }
-
-  if(VERBOSE){
-    print("New validSiz: %d\n", self->validSiz);
+      if(VERBOSE){
+        print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
+        print("Total number of boards: %d\n",self->validSiz);
+      }
   }
 
   // Clear the reference to the fired Msg
@@ -290,9 +296,12 @@ void mel_add_sync_board(bool validBoard[8], int boardId[8], int nodeId) {
   }
 }
 
+void add_sync_board(Mel_obj *self, int nodeId) {
+  mel_add_sync_board(self->validBoard, self->boardId, nodeId);
+}
+
 void send_sync(Mel_obj *self, int nodeId) {
   self->send_sync = 1;
-  mel_add_sync_board(self->validBoard, self->boardId, nodeId);
 }
 
 void DAC_gap(DAC_obj *self, int gap){
@@ -338,12 +347,12 @@ void app_add_board(App *self, int nodeId){
     }
   }
   self->validBoard[self->validSiz] = true;
-  self->boardId[self->validSiz] = (15-nodeId);
+  self->boardId[self->validSiz] = nodeId;
   self->validSiz++;
   sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
   //set modulo that this board will play
   SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
-  print("New Board added with nodeId: %d\n", (15-nodeId));
+  print("New Board added with nodeId: %d\n", nodeId);
 }
 
 void* get_nodeId(App *self, int dummy){
@@ -369,7 +378,7 @@ void play_song_funct(Mel_obj *self, int in){
           if (self->validBoard[i]) {
               CANMsg can_msg;
               can_msg.msgId = 'S';
-              can_msg.nodeId = 15 - SYNC(&app, get_nodeId, 0);  // sender's nodeId
+              can_msg.nodeId = SYNC(&app, get_nodeId, 0);  // sender's nodeId
               can_msg.length = 3;
               can_msg.buff[0] = (unsigned char)(self->boardId[i]);  // recipient nodeId
               can_msg.buff[1] = (unsigned char)(self->mel_idx);          // current note index
@@ -396,6 +405,9 @@ void play_song_funct(Mel_obj *self, int in){
     // unmute
     if(self->mel_mod == self->myModulo && failure == 0){
       SYNC(&obj_dac, DAC_gap, 0);
+    }
+    if(failure == 1){
+      print("Not playing because failure = 1\n", 0);
     }
 		// after call for tempo - gap    
     AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
@@ -472,15 +484,15 @@ void receiver(App *self, int unused) {
     // <int>K: changes the playing key to <int>\n"
     switch (id_sw) {
       case 'A':
-        if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
+        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
           self->validBoard[self->validSiz] = true;
-          self->boardId[self->validSiz] = (15-msg.nodeId);
+          self->boardId[self->validSiz] = msg.nodeId;
           self->validSiz++;
           sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
-          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
+          print("New Board added with nodeId: %d\n", msg.nodeId);
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
@@ -530,7 +542,7 @@ void receiver(App *self, int unused) {
         break;
       case 'S':
         if(VERBOSE){
-          print("Got S msg from NodeId %d\n", 15 - msg.nodeId);
+          print("Got S msg from NodeId %d\n", msg.nodeId);
           print("DAT: destination nodeId %d", (int)msg.buff[0]);
           print(" new mel_idx %d", (int)msg.buff[1]);
           print(" new mel_mod %d\n", (int)msg.buff[2]);
@@ -551,6 +563,12 @@ void receiver(App *self, int unused) {
         print("%d nodeId claimed conductor\n", (15-msg.nodeId));
         self->currentConductor = (15-msg.nodeId);
         self->conductor_mode = 0;
+        for(int i = 0; i < 8; i++){
+          if(self->removalTimers[i] != NULL){
+            ABORT(self->removalTimers[i]);
+            self->removalTimers[i] = NULL;
+          }
+        }
         break;
       case 'h':
         print("CAN protocol expects the msgId to be one of the following:\n", 0);
@@ -564,7 +582,7 @@ void receiver(App *self, int unused) {
         print("<int>K: changes the playing key to <int>\n", 0);
         break;
       case 'B': // set bpms
-        if((15-msg.nodeId) == self->currentConductor){
+        if(msg.nodeId == self->currentConductor){
           msg.buff[msg.length] = '\0';
           bufferValue = atoi((char*)msg.buff);
           if(bufferValue < 30){
@@ -582,7 +600,7 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'P': //start the song
-        if((15-msg.nodeId) == self->currentConductor){
+        if(msg.nodeId == self->currentConductor){
           print("Starting to play the song\n", 0);
           SYNC(&mel_obj, Mel_kill, 0);
           ASYNC(&mel_obj, play_song_funct, 0);
@@ -591,7 +609,7 @@ void receiver(App *self, int unused) {
           print("Musician trying to start the song, ignored\n", 0);
         }
       case 'X':
-        if((15-msg.nodeId) == self->currentConductor){
+        if(msg.nodeId == self->currentConductor){
           SYNC(&mel_obj, Mel_kill, 1);
           print("Stop the song\n", 0); 
         }else{
@@ -599,7 +617,7 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'K':
-        if((15-msg.nodeId) == self->currentConductor){
+        if(msg.nodeId == self->currentConductor){
           msg.buff[msg.length] = '\0';
           bufferValue = atoi((char*)msg.buff);
           if (bufferValue < -5){
@@ -624,44 +642,49 @@ void receiver(App *self, int unused) {
     int music_playing = SYNC(&mel_obj, get_playing, 0);
     switch (id_sw) {
       case 'A':
-        if(!inTheList((15-msg.nodeId), self->boardId, self->validBoard)){
+        if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
           CANMsg can_msg;
+          can_msg.msgId = 'C';
+          can_msg.nodeId = (15-self->nodeId);
+          can_msg.length = 0;
+          CAN_SEND(&can0, &can_msg);
           can_msg.msgId = 'K';
-          can_msg.nodeId = 15 - self->nodeId;
+          can_msg.nodeId = self->nodeId;
           can_msg.length = int_to_str(SYNC(&mel_obj, get_key, 0), can_msg.buff);
           CAN_SEND(&can0, &can_msg);
           can_msg.msgId = 'B';
-          can_msg.nodeId = 15 - self->nodeId;
+          can_msg.nodeId = self->nodeId;
           can_msg.length = int_to_str(SYNC(&mel_obj, get_tempo, 0), can_msg.buff);
           CAN_SEND(&can0, &can_msg);
 
           if(music_playing){
             // add it later with the sync comman
-            SYNC(&mel_obj, send_sync, (15-msg.nodeId));
+            SYNC(&mel_obj, add_sync_board, msg.nodeId);
+            AFTER(MSEC(250), &mel_obj, send_sync, msg.nodeId);
             if(VERBOSE){
               print("Commanding sync command\n", 0);
             }
           }
           
           self->validBoard[self->validSiz] = true;
-          self->boardId[self->validSiz] = (15-msg.nodeId);
+          self->boardId[self->validSiz] = msg.nodeId;
           self->validSiz++;
           sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
-          print("New Board added with nodeId: %d\n", (15-msg.nodeId));
+          print("New Board added with nodeId: %d\n", msg.nodeId);
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
           }
         }else {
-          int pos = listPos((15 - msg.nodeId), self->boardId, self->validBoard);
+          int pos = listPos(msg.nodeId, self->boardId, self->validBoard);
           if (pos >= 0 && pos < 8) {
             // Cancel previous pending removal if any
             if (self->removalTimers[pos] != NULL) {
-                ABORT(self->removalTimers[pos]);
-            }    
+              ABORT(self->removalTimers[pos]);
+            }
             // Schedule new removal and save the Msg
             self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
           }
@@ -673,6 +696,13 @@ void receiver(App *self, int unused) {
           self->conductor_mode = 0;
           self->currentConductor = (15-msg.nodeId);
           print("Giving conductor control, now in MUSICIAN mode\n", 0);
+          
+          for(int i = 0; i < 8; i++){
+            if(self->removalTimers[i] != NULL){
+              ABORT(self->removalTimers[i]);
+              self->removalTimers[i] = NULL;
+            }
+          }
         }
         break;
       default:
@@ -686,7 +716,7 @@ void send_ping(App *self, int dummy){
 	CANMsg can_msg;
   if(self->failureMode == 0){
     can_msg.msgId = 'A';
-    can_msg.nodeId = 15 - self->nodeId;
+    can_msg.nodeId = self->nodeId;
     can_msg.length = 0;
     int can_ret = CAN_SEND(&can0, &can_msg);
     if(can_ret != 0 && self->conductor_mode == 0 && SYNC(&mel_obj, get_playing, 0)){
@@ -713,7 +743,7 @@ void out_failure(App *self, int id){
 void can_write(App *self, int id){
 	CANMsg can_msg;
   can_msg.msgId = id & 0x7F;
-  can_msg.nodeId = 15 - self->nodeId;
+  can_msg.nodeId = self->nodeId;
   can_msg.length = self->str_index;
   for(int i = 0; i <= self->str_index; i++){
 		can_msg.buff[i] = self->str_buff[i];
@@ -768,6 +798,7 @@ void reader(App *self, int c) {
         print("c: debug can mode\n",0);
 				print("R: resets the configuration (bpm and key)\n",0);
 				print("P: starts playing the song\n",0);
+				print("M: print board status\n",0);
         print("T: mutes/unmutes song\n",0);
 				print("X: stops playing the song\n",0);
 				print("<int>K: changes the playing key to <int>\n",0);
@@ -786,12 +817,19 @@ void reader(App *self, int c) {
       case 'I'://enable or disabled mute state printing
         SYNC(&obj_dac, DAC_mute_print_en, 0);
         break;
+      case 'M':
+        print("Active boards rank sorted:\n", 0);
+        for(int i = 0; i < self->validSiz; i++){
+          print("%d ", self->boardId[i]);
+        }
+        print("\n", 0);
+        break;
       case 'R': // set bpms
         SYNC(&mel_obj, mel_set_tempo, 120);
         SYNC(&mel_obj, mel_set_key, 0);
         print("Bpms and set tempo resetted, 120 and 0 values respectivly\n", 0);
         can_msg.msgId = 'B';
-        can_msg.nodeId = 15 - self->nodeId;
+        can_msg.nodeId = self->nodeId;
         can_msg.length = 3;
         can_msg.buff[0] = '1';
         can_msg.buff[1] = '2';
@@ -799,7 +837,7 @@ void reader(App *self, int c) {
         can_msg.buff[3] = '\0';
         CAN_SEND(&can0, &can_msg);
         can_msg.msgId = 'K';
-        can_msg.nodeId = 15 - self->nodeId;
+        can_msg.nodeId = self->nodeId;
         can_msg.length = 1;
         can_msg.buff[0] = '0';
         can_msg.buff[1] = '\0';
@@ -872,12 +910,20 @@ void reader(App *self, int c) {
         print("C: claims conductor mode\n",0);
         print("c: debug can mode\n",0);
         print("T: mutes/unmutes song\n",0);
+				print("M: print board status\n",0);
 				print("<int>N: change board nodeId\n",0);
         print("<int>F: enters the specified error mode\n", 0);
         print("G: comes out of the error mode\n", 0);
         print("I: enables/disables mute state printing\n",0);
         print("<int>V: sets the volume to <int>\n",0);
-        break;       
+        break;  
+      case 'M':
+        print("Active boards rank sorted:\n", 0);
+        for(int i = 0; i < self->validSiz; i++){
+          print("%d ", self->boardId[i]);
+        }
+        print("\n", 0);
+        break;     
       case 'N': // set nodeId
         self->str_buff[self->str_index] = '\0';
         self->str_index = 0;
@@ -984,7 +1030,7 @@ void startApp(App *self, int arg) {
   SYNC(&obj_dac, DAC_gap, 1);
   ASYNC(&obj_dac, DAC_wr, 1);
   SYNC(&mel_obj, Mel_kill, 1);
-  AFTER(USEC(100), self, send_ping, 0);
+  AFTER(MSEC(250), self, send_ping, 0);
 }
 
 int main() {
