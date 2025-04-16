@@ -1,4 +1,4 @@
-//Press 'p' to print the user guide
+//Press 'h' to print the user guide
 
 #include "TinyTimber.h"
 #include "sciTinyTimber.h"
@@ -74,12 +74,17 @@ typedef struct {
   bool validBoard[8];
   int boardId[8];
   Msg removalTimers[8];
+  bool f_b_en[8];
+  int f_b_id[8];
   int currentConductor;
   int validSiz;
   int failureType;
   int failureMode;
   Msg failureTimer;
   int nodeId;
+  int mal_mode;
+  int wake_up_mode;
+  Msg wake_up_timer;
 } App;
 
 typedef struct {
@@ -107,7 +112,7 @@ typedef struct {
   int boardId[8];
 } Mel_obj;
 
-#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, 0, 1, 0, 0, NULL, c_nodeId}
+#define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, 0, 1, 0, 0, NULL, c_nodeId, 0, 0, NULL}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
 #define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 0, 1, 0, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}}
@@ -236,36 +241,67 @@ void removeBoard(App *self, int arg) {
   if(pos == -1){
     print("Board %d trying to be removed not in the list, ignoring\n", arg);
   }
+
+  //add the board to the failure list
+  mel_add_sync_board(self->f_b_en, self->f_b_id, arg);  
   
-  //Inform we lost the board
-  CANMsg can_msg;
-  can_msg.msgId = 'L';
-  can_msg.nodeId = self->nodeId;
-  can_msg.length = 1;
-  can_msg.buff[0] = (uchar) self->boardId[pos];
-  CAN_SEND(&can0, &can_msg);
+  if(self->conductor_mode == 1){
+    //Inform we lost the board
+    CANMsg can_msg;
+    can_msg.msgId = 'L';
+    can_msg.nodeId = self->nodeId;
+    can_msg.length = 1;
+    can_msg.buff[0] = (uchar) self->boardId[pos];
+    CAN_SEND(&can0, &can_msg);
+  }
 
   if(VERBOSE){
     print("info remove board nodeId: %d\n", self->boardId[pos]);
   }
 
   if (pos >= 0 && pos < self->validSiz && self->validBoard[pos]) {
-      print("Board %d timed out and was removed.\n", self->boardId[pos]);
-      if(self->validBoard[pos] != NULL){
-        ABORT(self->removalTimers[pos]);
-        self->removalTimers[pos] = NULL;
-      }
-      self->validBoard[pos] = false;
+    print("Board %d timed out and was removed.\n", self->boardId[pos]);
+    if(self->validBoard[pos] != NULL){
+      ABORT(self->removalTimers[pos]);
+      self->removalTimers[pos] = NULL;
+    }
+    self->validBoard[pos] = false;
 
-      // Optional: compact board list
-      self->validSiz--;
-      sortValidBoards(self->boardId, self->validBoard, self->removalTimers);
-      SYNC(&mel_obj, setNewSiz, self->validSiz);
-      SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
-      if(VERBOSE){
-        print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
-        print("Total number of boards: %d\n",self->validSiz);
+    // Optional: compact board list
+    self->validSiz--;
+    sortValidBoards(self->boardId, self->validBoard, self->removalTimers);
+    SYNC(&mel_obj, setNewSiz, self->validSiz);
+    SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
+    if(VERBOSE){
+      print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
+      print("Total number of boards: %d\n",self->validSiz);
+    }
+  }
+
+  if(self->conductor_mode == 0){
+    int conductor_pos = listPos(self->currentConductor, self->boardId, self->validBoard);
+    if(conductor_pos == -1 && self->validSiz > 1){ // conductor dropped -> if im the lowest rank -> claim conductor
+      if(self->nodeId == self->boardId[0]){ // im the lowest rank
+        CANMsg can_msg;
+        can_msg.msgId = 'C';
+        can_msg.nodeId = (15-self->nodeId);
+        can_msg.length = 0;
+        CAN_SEND(&can0, &can_msg);
+        can_msg.msgId = 'L';
+        can_msg.nodeId = self->nodeId;
+        can_msg.length = 1;
+        can_msg.buff[0] = (uchar) self->currentConductor;
+        CAN_SEND(&can0, &can_msg);
+        self->conductor_mode = 1;
+        self->currentConductor = self->boardId;
+        print("I am the lowest rank -> Conductor mode claimed\n", 0);
       }
+    }else if(self->validSiz <= 1){ // im an alone musician, so stop playing
+      if(self->conductor_mode == 0 && SYNC(&mel_obj, get_playing, 0)){
+        print("I am an alone musician, so I stop playing :(\n", 0);
+        SYNC(&mel_obj, Mel_kill, 1);
+      }
+    }
   }
 
   // Clear the reference to the fired Msg
@@ -364,6 +400,11 @@ void app_add_board(App *self, int nodeId){
   //set modulo that this board will play
   SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
   print("New Board added with nodeId: %d\n", nodeId);
+  int tmp;
+  if((tmp = listPos(msg.nodeId, self->f_b_id, self->f_b_en)) != -1){
+    self->f_b_en[tmp] = false;
+    self->f_b_id[tmp] = 0;
+  }
 }
 
 void* get_nodeId(App *self, int dummy){
@@ -400,10 +441,10 @@ void play_song_funct(Mel_obj *self, int in){
 
               CAN_SEND(&can0, &can_msg);
               
-              if(self->validBoard[i] != NULL){
-                ABORT(self->removalTimers[i]);
-                self->removalTimers[i] = NULL;
-              }
+              // if(self->validBoard[i] != NULL){
+              //   ABORT(self->removalTimers[i]);
+              //   self->removalTimers[i] = NULL;
+              // }
               self->validBoard[i] = false;
 
               if(VERBOSE){
@@ -499,6 +540,9 @@ void receiver(App *self, int unused) {
     // <int>K: changes the playing key to <int>\n"
     switch (id_sw) {
       case 'A':
+        if(self->mal_mode == 1){
+          F_out_handler(self, self->failureType);
+        }
         if(!inTheList(msg.nodeId, self->boardId, self->validBoard)){
           self->validBoard[self->validSiz] = true;
           self->boardId[self->validSiz] = msg.nodeId;
@@ -508,9 +552,24 @@ void receiver(App *self, int unused) {
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
           print("New Board added with nodeId: %d\n", msg.nodeId);
+          int tmp;
+          if((tmp = listPos(msg.nodeId, self->f_b_id, self->f_b_en)) != -1){
+            self->f_b_en[tmp] = false;
+            self->f_b_id[tmp] = 0;
+          }
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
+          }
+        }else{
+          int pos = listPos(msg.nodeId, self->boardId, self->validBoard);
+          if (pos >= 0 && pos < 8) {
+            // Cancel previous pending removal if any
+            if (self->removalTimers[pos] != NULL) {
+              ABORT(self->removalTimers[pos]);
+            }
+            // Schedule new removal and save the Msg
+            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, msg.nodeId);
           }
         }
         break;
@@ -518,22 +577,19 @@ void receiver(App *self, int unused) {
         if((int)msg.buff[0] == self->nodeId){
           SYNC(&mel_obj, Mel_kill, 1); //stop playing
           //empty all the valid list except for us
-          self->validSiz = 1;
-          self->validBoard[0] = true;
           for (int i = 1; i < 8; i++) {
             if(self->validBoard[i] != NULL){
               ABORT(self->removalTimers[i]);
               self->removalTimers[i] = NULL;
             }
+            if(self->validBoard[i] && self->boardId[i] != self->nodeId){
+              mel_add_sync_board(self->f_b_en, self->f_b_id, self->boardId[i]);
+            }
             self->validBoard[i] = false;
           }
+          self->validSiz = 1;
+          self->validBoard[0] = true;
           self->boardId[0] = self->nodeId;
-          for(int i = 0; i < 8; i++){
-            if(self->removalTimers[i] != NULL){
-              ABORT(self->removalTimers[i]);
-              self->removalTimers[i] = NULL;
-            }
-          }
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
@@ -555,6 +611,7 @@ void receiver(App *self, int unused) {
             //set modulo that this board will play
             SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
             SYNC(&mel_obj, setNewSiz, self->validSiz);
+            mel_add_sync_board(self->f_b_en, self->f_b_id, (int)msg.buff[0]);
             print("Board removed with nodeId: %d\n", ((int)msg.buff[0]));
             if(VERBOSE){
               print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
@@ -584,14 +641,20 @@ void receiver(App *self, int unused) {
         break;
       case 'C':
         print("%d nodeId claimed conductor\n", (15-msg.nodeId));
+
+        if(self->wake_up_mode == 1){ // im in wake up and someone claimed so i stop the call
+          self->wake_up_mode = 0;
+          ABORT(self->wake_up_timer);
+        }
+
         self->currentConductor = (15-msg.nodeId);
         self->conductor_mode = 0;
-        for(int i = 0; i < 8; i++){
-          if(self->removalTimers[i] != NULL){
-            ABORT(self->removalTimers[i]);
-            self->removalTimers[i] = NULL;
-          }
-        }
+        // for(int i = 0; i < 8; i++){
+        //   if(self->removalTimers[i] != NULL){
+        //     ABORT(self->removalTimers[i]);
+        //     self->removalTimers[i] = NULL;
+        //   }
+        // }
         break;
       case 'h':
         print("CAN protocol expects the msgId to be one of the following:\n", 0);
@@ -697,11 +760,16 @@ void receiver(App *self, int unused) {
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
           print("New Board added with nodeId: %d\n", msg.nodeId);
+          int tmp;
+          if((tmp = listPos(msg.nodeId, self->f_b_id, self->f_b_en)) != -1){
+            self->f_b_en[tmp] = false;
+            self->f_b_id[tmp] = 0;
+          }
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
           }
-        }else {
+        }else{
           int pos = listPos(msg.nodeId, self->boardId, self->validBoard);
           if (pos >= 0 && pos < 8) {
             // Cancel previous pending removal if any
@@ -714,7 +782,7 @@ void receiver(App *self, int unused) {
         }
         break;
       case 'C':
-        //if in conductor change back to mussician and give them control
+        //if in conductor change back to musician and give them control
         if(self->conductor_mode != 0){
           self->conductor_mode = 0;
           self->currentConductor = (15-msg.nodeId);
@@ -735,16 +803,83 @@ void receiver(App *self, int unused) {
   }
 }
 
+void WK_timeout(App, *self, int dummy){ // after the WK window, noone aswered, so i claim conductor
+  self->wake_up_mode = 0; 
+  
+  CANMsg can_msg;
+  can_msg.msgId = 'C';
+  can_msg.nodeId = (15-self->nodeId);
+  can_msg.length = 0;
+  CAN_SEND(&can0, &can_msg);
+  // sending also k and b so we are all sync
+  can_msg.msgId = 'K';
+  can_msg.nodeId = self->nodeId;
+  can_msg.length = int_to_str(SYNC(&mel_obj, get_key, 0), can_msg.buff);
+  CAN_SEND(&can0, &can_msg);
+  can_msg.msgId = 'B';
+  can_msg.nodeId = self->nodeId;
+  can_msg.length = int_to_str(SYNC(&mel_obj, get_tempo, 0), can_msg.buff);
+  CAN_SEND(&can0, &can_msg);
+  self->conductor_mode = 1;
+  self->currentConductor = self->boardId;
+  print("No one claimed conductor after WK -> Conductor mode claimed\n", 0);
+}
+
+void F_in_handler(App, *self, int err_num){ // im entering F1 or F2 or F3 what should i do??
+  bool playing = SYNC(&mel_obj, get_playing, 0);
+
+  if(playing){
+    print("F%d error I stop playing :(\n", err_num);
+    SYNC(&mel_obj, Mel_kill, 1);
+  }
+
+  if(err_num == 3){ //When detecting an F3 failure, DIRECTLY set the state of all other boards to 
+    for (int i = 1; i < 8; i++) {
+      if(self->validBoard[i] != NULL){
+        ABORT(self->removalTimers[i]);
+        self->removalTimers[i] = NULL;
+      }
+      if(self->validBoard[i] && self->boardId[i] != self->nodeId){
+        mel_add_sync_board(self->f_b_en, self->f_b_id, self->boardId[i]);
+      }
+      self->validBoard[i] = false;
+    }
+    self->validSiz = 1;
+    self->validBoard[0] = true;
+    self->boardId[0] = self->nodeId
+  }
+
+  self->conductor_mode = 0; 
+  self->mal_mode = 1;
+}
+
+void F_out_handler(App, *self, int err_num){ // im leaving F1 or F2 or F3 what should i do??
+  int timer = 250 + self->nodeId * 4;
+
+  // no longer MAL, since we are already waking up
+  self->mal_mode = 0;
+
+  out_failure(self, 0);
+
+  //call the WK timeout with random timer
+  self->wake_up_mode = 1; 
+  self->wake_up_timer = AFTER(MSEC(timer), self, WK_timeout, 0);
+   
+}
+
 void send_ping(App *self, int dummy){
+
+  // send ping to all boards
 	CANMsg can_msg;
   if(self->failureMode == 0){
     can_msg.msgId = 'A';
     can_msg.nodeId = self->nodeId;
     can_msg.length = 0;
     int can_ret = CAN_SEND(&can0, &can_msg);
-    if(can_ret != 0 && self->conductor_mode == 0 && SYNC(&mel_obj, get_playing, 0)){
-      print("Im an alone musician, so i stop playing :(\n", 0);
-      SYNC(&mel_obj, Mel_kill, 1);
+    if(can_ret != 0){ // if my pings error -> F3 error
+      self->failureMode = 1;
+      self->failureType = 3;
+      F_in_handler(self, 3);
     }
 
     if(dummy%10 == 0 && VERBOSE){
@@ -758,7 +893,9 @@ void send_ping(App *self, int dummy){
 
 void out_failure(App *self, int id){
   self->failureMode = 0;
-
+  if(self->failureType == 2){
+    ABORT(self->failureTimer);
+  }
   AFTER(USEC(1), self, send_ping, 0);
   print("Comming out of failure mode\n", 0);
 }
@@ -826,11 +963,6 @@ void reader(App *self, int c) {
 				print("X: stops playing the song\n",0);
 				print("<int>K: changes the playing key to <int>\n",0);
 				break;
-			// case 'G':
-			// 	self->conductor_mode = 0;
-			// 	SYNC(&mel_obj, Mel_kill, 1);
-			// 	print("Now in musician mode\n", 0);
-			// 	break;
       case 'c':
 			  self->can_mode = 1;
 			  break;
@@ -844,6 +976,14 @@ void reader(App *self, int c) {
         print("Active boards rank sorted:\n", 0);
         for(int i = 0; i < self->validSiz; i++){
           print("%d ", self->boardId[i]);
+          if(self->boardId[i] == self->currentConductor)
+          print("(Conductor) ", 0);
+        }
+        print("\n", 0);
+        print("Inactive boards:\n", 0);
+        for(int i = 0; i < 8; i++){
+          if(self->f_b_en[i])
+            print("%d ", self->f_b_id[i]);
         }
         print("\n", 0);
         break;
@@ -921,7 +1061,33 @@ void reader(App *self, int c) {
 				SYNC(&mel_obj, mel_set_key, bufferValue);
 				print("Key: %d\n", bufferValue);
 				break;
-			default:
+      case 'F':
+        self->str_buff[self->str_index] = '\0';
+        self->str_index = 0;
+        bufferValue = atoi(self->str_buff);
+        if(bufferValue == 1){
+          SYNC(&mel_obj, Mel_kill, 1);
+          self->failureType = bufferValue;
+          self->failureMode = 1;
+          F_in_handler(self,self->failureType);
+          print("F1 failure mode activated\n", 0);
+        }else if (bufferValue == 2){
+          SYNC(&mel_obj, Mel_kill, 1);
+          self->failureType = bufferValue;
+          self->failureMode = 1;
+          F_in_handler(self, self->failureType);
+          self->failureTimer = AFTER(SEC(random), self, F_out_handler, self->failureType);
+          print("F2 failure mode activated, exiting in %d sec\n", random);
+        }else{ // error not recognized
+          print("F%d failure mode not recognized\n", bufferValue);
+        }
+        break;
+
+      case 'G':
+        out_failure(self, 0);
+        F_out_handler(self, self->failureType);
+        break;
+        default:
 				self->str_buff[self->str_index++] = c;
 				break;
 		}
@@ -944,6 +1110,14 @@ void reader(App *self, int c) {
         print("Active boards rank sorted:\n", 0);
         for(int i = 0; i < self->validSiz; i++){
           print("%d ", self->boardId[i]);
+          if(self->boardId[i] == self->currentConductor)
+          print("(Conductor) ", 0);
+        }
+        print("\n", 0);
+        print("Inactive boards:\n", 0);
+        for(int i = 0; i < 8; i++){
+          if(self->f_b_en[i])
+            print("%d ", self->f_b_id[i]);
         }
         print("\n", 0);
         break;     
@@ -988,24 +1162,21 @@ void reader(App *self, int c) {
           SYNC(&mel_obj, Mel_kill, 1);
           self->failureType = bufferValue;
           self->failureMode = 1;
+          F_in_handler(self,self->failureType);
           print("F1 failure mode activated\n", 0);
         }else if (bufferValue == 2){
           SYNC(&mel_obj, Mel_kill, 1);
           self->failureType = bufferValue;
           self->failureMode = 1;
-          self->failureTimer = AFTER(SEC(random), self, out_failure, 0);
-          print("F2 failure mode activated, comming in %d sec\n", random);
+          self->failureTimer = AFTER(SEC(random), self, F_out_handler, self->failureType);
+          F_in_handler(self,self->failureType);
+          print("F2 failure mode activated, exiting in %d sec\n", random);
         }else{ // error not recognized
           print("F%d failure mode not recognized\n", bufferValue);
         }
         break;
       case 'G':
-        self->failureMode = 0;
-        if(self->failureType == 2){
-          ABORT(self->failureTimer);
-        }
-        AFTER(USEC(1), self, send_ping, 0);
-        print("Comming out of failure mode\n", 0);
+        F_out_handler(self, self->failureType);
         break;
 		  case 'C':
         self->conductor_mode = 1;        
