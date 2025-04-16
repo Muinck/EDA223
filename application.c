@@ -227,8 +227,18 @@ void setModulo(Mel_obj *self, int newMod){
   self->myModulo = newMod;
 }
 
-void removeBoard(App *self, int arg) {
-  int pos = arg;
+void removeBoard(App *self, int nodeId) {
+  int pos = listPos(nodeId, self->boardId, self->validBoard);
+  if(pos == -1){
+    print("Board %d not in the list, ignoring\n", nodeId);
+    return;
+  }
+  for(int i = 0; i < 8; i++){
+    if(self->removalTimers[i] != NULL){
+      ABORT(self->removalTimers[i]);
+    }
+    self->removalTimers[i] = NULL;
+  }
   
   //Inform we lost the board
   CANMsg can_msg;
@@ -492,10 +502,18 @@ void receiver(App *self, int unused) {
           //set modulo that this board will play
           SYNC(&mel_obj, setModulo, listPos(self->nodeId, self->boardId, self->validBoard));
           SYNC(&mel_obj, setNewSiz, self->validSiz);
-          print("New Board added with nodeId: %d\n", msg.nodeId);
+          print("New Board added with nodeId while in musician: %d\n", msg.nodeId);
           if(VERBOSE){
             print("Our modulo is now: %d\n", listPos(self->nodeId, self->boardId, self->validBoard));
             print("Total number of boards: %d\n",self->validSiz);
+          }
+        }else {
+          int pos = listPos(msg.nodeId, self->boardId, self->validBoard);
+          if (pos >= 0 && pos < 8) {
+            // Cancel previous pending removal if any
+            if (self->removalTimers[pos] != NULL) {
+              ABORT(self->removalTimers[pos]);
+            }
           }
         }
         break;
@@ -686,7 +704,7 @@ void receiver(App *self, int unused) {
               ABORT(self->removalTimers[pos]);
             }
             // Schedule new removal and save the Msg
-            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, pos);
+            self->removalTimers[pos] = AFTER(MSEC(250), self, removeBoard, msg.nodeId);
           }
         }
         break;
