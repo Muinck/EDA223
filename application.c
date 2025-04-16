@@ -203,7 +203,7 @@ void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
   // Simple insertion sort on validIds
   for (int i = 1; i < count; i++) {
       int key = validIds[i];
-      int msg = valid_timers[i];
+      Msg msg = valid_timers[i];
       int j = i - 1;
       while (j >= 0 && validIds[j] > key) {
           validIds[j + 1] = validIds[j];
@@ -261,7 +261,7 @@ void removeBoard(App *self, int arg) {
 
   if (pos >= 0 && pos < self->validSiz && self->validBoard[pos]) {
     print("Board %d timed out and was removed.\n", self->boardId[pos]);
-    if(self->validBoard[pos] != NULL){
+    if(self->removalTimers[pos] != NULL){
       ABORT(self->removalTimers[pos]);
       self->removalTimers[pos] = NULL;
     }
@@ -395,6 +395,7 @@ void app_add_board(App *self, int nodeId){
   }
   self->validBoard[self->validSiz] = true;
   self->boardId[self->validSiz] = nodeId;
+  self->removalTimers[self->validSiz] = NULL;
   self->validSiz++;
   sortValidBoards(self->boardId, self->validBoard, self->removalTimers); // so we now the order that they will play
   //set modulo that this board will play
@@ -578,7 +579,7 @@ void receiver(App *self, int unused) {
           SYNC(&mel_obj, Mel_kill, 1); //stop playing
           //empty all the valid list except for us
           for (int i = 1; i < 8; i++) {
-            if(self->validBoard[i] != NULL){
+            if(self->removalTimers[i] != NULL){
               ABORT(self->removalTimers[i]);
               self->removalTimers[i] = NULL;
             }
@@ -601,7 +602,7 @@ void receiver(App *self, int unused) {
         }else{
           if(inTheList(((int)msg.buff[0]), self->boardId, self->validBoard)){
             int rm_pos = listPos((int)msg.buff[0], self->boardId, self->validBoard);
-            if(self->validBoard[rm_pos] != NULL){
+            if(self->removalTimers[rm_pos] != NULL){
               ABORT(self->removalTimers[rm_pos]);
               self->removalTimers[rm_pos] = NULL;
             }
