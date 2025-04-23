@@ -102,7 +102,7 @@ typedef struct {
   int tempo; // period in ms
   int gap_siz; // ms //cte
   int key;
-  int kill;
+  int playing;
   int mel_idx;
   int mel_mod;
   int myModulo; //so the app knows in which modulo to play
@@ -110,12 +110,13 @@ typedef struct {
   int send_sync;
   bool validBoard[8];
   int boardId[8];
+  Msg play_song_meth;
 } Mel_obj;
 
 #define initApp() { initObject(), {}, 0, {}, 0, 0, {1, 0, 0, 0, 0, 0, 0, 0}, {c_nodeId, 0, 0, 0, 0, 0, 0, 0}, {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, 0, 1, 0, 0, NULL, c_nodeId, 0, 0, NULL}
 #define initDAC() { initObject(), 3, 0, 1, 0, 500, 0}
 #define initload() { initObject(), 1000, 0}
-#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 0, 1, 0, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}}
+#define initMel() { initObject(), 60000000/120, 50, 0, 0, 0, 0, 0, 1, 0, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, NULL}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -135,6 +136,10 @@ void print(char *format, int arg) {
 
 int bpm2tempo(int bpm){
   return 60000000/bpm; // us
+}
+
+void mel_set_play_meth(Mel_obj *self, int meth){
+  self->play_song_meth = (Msg)(uintptr_t)meth;
 }
 
 void mel_set_tempo(Mel_obj *self, int tempo){
@@ -222,10 +227,7 @@ void sortValidBoards(int boardId[8], bool validBoard[8], Msg removalTimers[8]) {
 }
 
 void* get_playing(Mel_obj *self, int unused) {
-  int ret = 0;
-  if(self->kill == 0){
-    ret = 1;
-  }
+  int ret = self->playing;
   return (void*)(intptr_t)(ret);
 }
 
@@ -237,8 +239,12 @@ void setModulo(Mel_obj *self, int newMod){
   self->myModulo = newMod;
 }
 
-void Mel_kill(Mel_obj *self, int kill){
-  self->kill = kill;
+void Mel_kill(Mel_obj *self, int dummy){
+  self->playing = 0;
+  if(self->play_song_meth != NULL){
+    ABORT(self->play_song_meth);
+    self->play_song_meth = NULL;
+  }
 }
 
 void mel_add_sync_board(bool validBoard[8], int boardId[8], int nodeId) {
@@ -402,20 +408,15 @@ void* get_nodeId(App *self, int dummy){
   return (void*)(intptr_t)(ret);
 }
 
+void mel_set_playing(Mel_obj *self, int playing){
+  self->playing = playing;
+}
+
 void play_song_funct(Mel_obj *self, int in){
   // 0 -> note, 1 -> gap
+  self->play_song_meth = NULL;
+  self->playing = 1;
 
-  if(self->kill == 1){
-    // mute
-    SYNC(&obj_dac, DAC_gap, 1);
-    self->mel_idx = 0;
-    self->mel_mod = 0;
-    
-    if(VERBOSE){
-      print("Killing the song...\n", 0);
-    }
-    return;
-  }
   if(in == 0){
     //TODO sending it here is a problem, maybe better if we do it when starting the gap
     if (self->send_sync == 1) {
@@ -460,7 +461,7 @@ void play_song_funct(Mel_obj *self, int in){
       print("Not playing because failure = 1\n", 0);
     }
 		// after call for tempo - gap    
-    AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
+    self->play_song_meth = AFTER(USEC(((self->tempo*note_dur[self->mel_idx])-(self->gap_siz*1000))), self, play_song_funct, 1);
   }else{
     // mute
     SYNC(&obj_dac, DAC_gap, 1);
@@ -468,7 +469,7 @@ void play_song_funct(Mel_obj *self, int in){
     self->mel_idx = (self->mel_idx+1) % 32;
     self->mel_mod = (self->mel_mod+1) % self->validSiz;
     //after call for gap
-    AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
+    self->play_song_meth = AFTER(MSEC(self->gap_siz), self, play_song_funct, 0);
   }
 }
 
@@ -570,9 +571,10 @@ void WK_timeout(App *self, int dummy){ // after the WK window, noone aswered, so
   can_msg.nodeId = self->nodeId;
   can_msg.length = 0;
   CAN_SEND(&can0, &can_msg);
-  SYNC(&mel_obj, Mel_kill, 0);
-  ASYNC(&mel_obj, play_song_funct, 0);
-
+  SYNC(&mel_obj, Mel_kill, 0); // kills the song if still playing
+  SYNC(&mel_obj, mel_set_playing, 1);
+  Msg tmp_play = ASYNC(&mel_obj, play_song_funct, 0);
+  SYNC(&mel_obj, mel_set_play_meth, (int)(uintptr_t)tmp_play);
 }
 
 void out_failure(App *self, int id){
@@ -750,7 +752,9 @@ void receiver(App *self, int unused) {
           //and start playing
           //ABORT the play and play
           SYNC(&mel_obj, Mel_kill, 0);
-          ASYNC(&mel_obj, play_song_funct, 0);
+          SYNC(&mel_obj, mel_set_playing, 1);
+          Msg tmp_play = ASYNC(&mel_obj, play_song_funct, 0);
+          SYNC(&mel_obj, mel_set_play_meth, (int)(uintptr_t)tmp_play);
           print("Rejoinign the play\n", 0);
         }
         break;
@@ -802,7 +806,9 @@ void receiver(App *self, int unused) {
         if(msg.nodeId == self->currentConductor && self->failureMode == 0){
           print("Starting to play the song\n", 0);
           SYNC(&mel_obj, Mel_kill, 0);
-          ASYNC(&mel_obj, play_song_funct, 0);
+          SYNC(&mel_obj, mel_set_playing, 1);
+          Msg tmp_play = ASYNC(&mel_obj, play_song_funct, 0);
+          SYNC(&mel_obj, mel_set_play_meth, (int)(uintptr_t)tmp_play);
           break;
         }else{
           print("Musician trying to start the song, ignored\n", 0);
@@ -1034,7 +1040,9 @@ void reader(App *self, int c) {
 			case 'P': //start the song
 				print("Starting to play the song\n", 0);
         SYNC(&mel_obj, Mel_kill, 0);
-        ASYNC(&mel_obj, play_song_funct, 0);
+        SYNC(&mel_obj, mel_set_playing, 1);
+        Msg tmp_play = ASYNC(&mel_obj, play_song_funct, 0);
+        SYNC(&mel_obj, mel_set_play_meth, (int)(uintptr_t)tmp_play);
 				can_write(&app, c);
 				break;
 			case 'X':
