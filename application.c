@@ -11,7 +11,7 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-const bool VERBOSE = true;
+const bool VERBOSE = false;
 const int  c_nodeId = 15;
 
 const int DAC_WR_ADDR = DAC_Trigger_T5_TRGO + DAC_BASE;
@@ -239,8 +239,16 @@ void setModulo(Mel_obj *self, int newMod){
   self->myModulo = newMod;
 }
 
+void DAC_gap(DAC_obj *self, int gap){
+  self->gap = gap;
+}
+
 void Mel_kill(Mel_obj *self, int dummy){
   self->playing = 0;
+  // silence the dac and restart the song
+  SYNC(&obj_dac, DAC_gap, 1);
+  self->mel_idx = 0;
+  self->mel_mod = 0;
   if(self->play_song_meth != NULL){
     ABORT(self->play_song_meth);
     self->play_song_meth = NULL;
@@ -348,10 +356,6 @@ void add_sync_board(Mel_obj *self, int nodeId) {
 
 void send_sync(Mel_obj *self, int nodeId) {
   self->send_sync = 1;
-}
-
-void DAC_gap(DAC_obj *self, int gap){
-  self->gap = gap;
 }
 
 void DAC_set_period(DAC_obj *self, int period){
@@ -521,7 +525,7 @@ void F_in_handler(App *self, int err_num){ // im entering F1 or F2 or F3 what sh
   }
 
   if(err_num == 3){ //When detecting an F3 failure, DIRECTLY set the state of all other boards to inactive
-    for (int i = 1; i < 8; i++) {
+    for (int i = 0; i < 8; i++) {
       if(self->removalTimers[i] != NULL && self->validBoard[i]){
         ABORT(self->removalTimers[i]);
         self->removalTimers[i] = NULL;
@@ -692,7 +696,7 @@ void receiver(App *self, int unused) {
         if((int)msg.buff[0] == self->nodeId){
           SYNC(&mel_obj, Mel_kill, 1); //stop playing
           //empty all the valid list except for us
-          for (int i = 1; i < 8; i++) {
+          for (int i = 0; i < 8; i++) {
             if(self->removalTimers[i] != NULL){
               ABORT(self->removalTimers[i]);
               self->removalTimers[i] = NULL;
@@ -746,12 +750,12 @@ void receiver(App *self, int unused) {
           int new_mel_idx = (int)msg.buff[1];
           int new_mel_mod = (int)msg.buff[2];
           // set module and melody index
+          SYNC(&mel_obj, Mel_kill, 0);
           SYNC(&mel_obj, syncMel_idx, new_mel_idx);
           SYNC(&mel_obj, syncModulo, new_mel_mod);
 
           //and start playing
           //ABORT the play and play
-          SYNC(&mel_obj, Mel_kill, 0);
           SYNC(&mel_obj, mel_set_playing, 1);
           Msg tmp_play = ASYNC(&mel_obj, play_song_funct, 0);
           SYNC(&mel_obj, mel_set_play_meth, (int)(uintptr_t)tmp_play);
