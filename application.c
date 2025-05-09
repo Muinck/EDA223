@@ -30,9 +30,10 @@ typedef struct {
   int can_head;  // index of the next item to remove (read)
   int can_tail;  // index where the next item will be inserted (write)
   int can_size;  // current number of elements in the buffer (optional but useful)
+  Timer timer;
 } App;
 
-#define initApp() { initObject(), 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, 0, 0}
+#define initApp() { initObject(), 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, 0, 0, initTimer()}
 
 void reader(App*, int);
 void receiver(App*, int);
@@ -69,8 +70,10 @@ int can_buffer_pop(int buff[10], int* head, int* tail, int* size) {
   return value;
 }
 
-void get_msg(CANMsg in){
-  print("Aplication got CAN with id %d\n", in.msgId);
+void get_msg(CANMsg in, App *self){
+  Time diff = T_SAMPLE(&self->timer)/100000;
+  print("Aplication got CAN with id %d ", in.msgId);
+  print("with time %d\n", diff);
 }
 
 void rst_cooldown(App *self, int dummy){
@@ -81,7 +84,7 @@ void rst_cooldown(App *self, int dummy){
     msg.length = 0;
     msg.nodeId = c_nodeId;
     msg.msgId = can_buffer_pop(self->can_buff, &self->can_head, &self->can_tail, &self->can_size);
-    get_msg(msg); //send next msg to app
+    get_msg(msg, self); //send next msg to app
 
     AFTER(MSEC(1000), self, rst_cooldown, 0);
   }
@@ -98,7 +101,7 @@ void receiver(App *self, int unused) {
     }
   }else{
     self->cooldown = 1;
-    get_msg(msg); //send msg to app
+    get_msg(msg, self); //send msg to app
     AFTER(MSEC(1000), self, rst_cooldown, 0);
   }
 }
@@ -168,6 +171,7 @@ void startApp(App *self, int arg) {
   CAN_INIT(&can0);
   SCI_INIT(&sci0);
   SCI_WRITE(&sci0, "Hello, hello...\n");
+  T_RESET(&self->timer);
 
 }
 
